@@ -1,5 +1,4 @@
 discord.py==2.1.0
 googletrans==4.0.0-rc1
-py-rcon==0.3.2   # Exemplo de biblioteca RCON
 SQLAlchemy==2.0.0
-psycopg2==2.9.6
+psycopg2-binary==2.9.6
