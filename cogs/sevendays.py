@@ -5,32 +5,114 @@ from discord import app_commands
 from sqlalchemy.orm import Session
 from db import SessionLocal, ServerConfig
 
-# Se estiver usando a biblioteca py-rcon (pip install py-rcon)
-from rcon import Client
+import telnetlib
+import threading
+import asyncio
+
+active_connections = {}  # guild_id -> TelnetConnection
+
+class TelnetConnection:
+    def __init__(self, guild_id, ip, port, password, channel_id, bot):
+        self.guild_id = guild_id
+        self.ip = ip
+        self.port = port
+        self.password = password
+        self.channel_id = channel_id
+        self.bot = bot
+
+        self.telnet = None
+        self.thread = None
+        self.stop_flag = False
+
+        self.lock = threading.Lock()  # pra evitar conflito entre leitura continua e send_command
+
+    def start(self):
+        self.thread = threading.Thread(target=self.run)
+        self.thread.start()
+
+    def run(self):
+        try:
+            with self.lock:
+                self.telnet = telnetlib.Telnet(self.ip, self.port, timeout=10)
+                self.telnet.read_until(b"password:")
+                self.telnet.write(self.password.encode("utf-8") + b"\r\n")
+                self.telnet.read_until(b">", timeout=5)
+
+            while not self.stop_flag:
+                # Lê linha a cada ~1s
+                line = self.telnet.read_until(b"\n", timeout=1)
+                if line:
+                    line_decoded = line.decode("utf-8", errors="ignore").strip()
+                    if line_decoded:
+                        self.handle_line(line_decoded)
+        except Exception as e:
+            print(f"[{self.guild_id}] TelnetConnection erro: {e}")
+        print(f"[{self.guild_id}] TelnetConnection finalizada.")
+
+    def stop(self):
+        self.stop_flag = True
+        with self.lock:
+            if self.telnet:
+                self.telnet.write(b"exit\r\n")
+                self.telnet.close()
+        if self.thread:
+            self.thread.join()
+
+    def handle_line(self, line):
+        # Exemplo: se ver 'Chat (from ' ou 'GMSG'
+        if "Chat (from " in line or "GMSG" in line:
+            # Manda para canal
+            if self.channel_id:
+                ch = self.bot.get_channel(int(self.channel_id))
+                if ch:
+                    # usar run_coroutine_threadsafe pois estamos fora da thread principal
+                    asyncio.run_coroutine_threadsafe(ch.send(line), self.bot.loop)
+
+    async def send_command(self, cmd, wait_prompt=True):
+        """Envia comando e retorna output. Bloqueia a thread. Uso: await conn.send_command("gettime")"""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._send_command_blocking, cmd, wait_prompt)
+
+    def _send_command_blocking(self, cmd, wait_prompt):
+        with self.lock:
+            self.telnet.write(cmd.encode("utf-8") + b"\r\n")
+            if wait_prompt:
+                data = self.telnet.read_until(b">", timeout=3)
+                return data.decode("utf-8", errors="ignore")
+            else:
+                return ""
 
 class SevenDaysCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot):
         self.bot = bot
-        self.check_chat_loop.start()
 
-    def cog_unload(self):
-        self.check_chat_loop.cancel()
-
-    @app_commands.command(name="7dtd_addserver", description="Adiciona um servidor 7DTD para este Discord.")
+    @app_commands.command(name="7dtd_addserver", description="Adiciona/atualiza um servidor 7DTD para este Discord.")
     async def addserver(self, interaction: discord.Interaction, ip: str, port: int, password: str):
         guild_id = str(interaction.guild_id)
         with SessionLocal() as session:
-            config = session.query(ServerConfig).filter_by(guild_id=guild_id).first()
-            if not config:
-                config = ServerConfig(guild_id=guild_id)
-                session.add(config)
-            config.ip = ip
-            config.port = port
-            config.password = password
+            cfg = session.query(ServerConfig).filter_by(guild_id=guild_id).first()
+            if not cfg:
+                cfg = ServerConfig(guild_id=guild_id)
+                session.add(cfg)
+            cfg.ip = ip
+            cfg.port = port
+            cfg.password = password
             session.commit()
 
+        # Se já existe conexão, paramos
+        if guild_id in active_connections:
+            active_connections[guild_id].stop()
+            del active_connections[guild_id]
+
+        # Precisamos do channel_id se já definido
+        channel_id = cfg.channel_id
+        # Cria e inicia
+        conn = TelnetConnection(guild_id, ip, port, password, channel_id, self.bot)
+        active_connections[guild_id] = conn
+        conn.start()
+
         await interaction.response.send_message(
-            f"Servidor 7DTD configurado!\nIP: `{ip}`, Porta: `{port}`", 
+            f"Servidor 7DTD configurado!\nIP: `{ip}`, Porta: `{port}`\nTentando conectar...",
             ephemeral=True
         )
 
@@ -38,93 +120,38 @@ class SevenDaysCog(commands.Cog):
     async def set_channel(self, interaction: discord.Interaction, canal: discord.TextChannel):
         guild_id = str(interaction.guild_id)
         with SessionLocal() as session:
-            config = session.query(ServerConfig).filter_by(guild_id=guild_id).first()
-            if not config:
+            cfg = session.query(ServerConfig).filter_by(guild_id=guild_id).first()
+            if not cfg:
                 await interaction.response.send_message(
                     "Nenhum servidor 7DTD configurado. Use /7dtd_addserver primeiro.",
                     ephemeral=True
                 )
                 return
-            config.channel_id = str(canal.id)
+            cfg.channel_id = str(canal.id)
             session.commit()
+
+        # Se existir conexão, atualiza
+        if guild_id in active_connections:
+            active_connections[guild_id].channel_id = str(canal.id)
 
         await interaction.response.send_message(
             f"Canal definido: {canal.mention}", 
             ephemeral=True
         )
 
-    @app_commands.command(name="7dtd_status", description="Exibe informações do servidor 7DTD.")
-    async def show_status(self, interaction: discord.Interaction):
+    @app_commands.command(name="7dtd_time", description="Mostra dia/hora do servidor (exemplo).")
+    async def show_time(self, interaction: discord.Interaction):
         guild_id = str(interaction.guild_id)
-        with SessionLocal() as session:
-            config = session.query(ServerConfig).filter_by(guild_id=guild_id).first()
-            if not config:
-                await interaction.response.send_message(
-                    "Nenhum servidor 7DTD configurado. Use /7dtd_addserver primeiro.",
-                    ephemeral=True
-                )
-                return
-
-            ip = config.ip
-            port = config.port
-            password = config.password
-
-        # Tentamos conectar e confirmar se o servidor responde
-        try:
-            with Client(ip, port, passwd=password) as client:
-                # Exemplos de comando RCON:
-                # Vamos chamar 'version' só pra garantir que retornou algo
-                version_info = client.run("version")
-                # Você também poderia chamar outros comandos como:
-                # game_time = client.run("gt")  # se existir
-                # players = client.run("lp")    # se existir
-        except Exception as e:
-            # Falhou a conexão: retornamos erro
-            await interaction.response.send_message(
-                f"❌ Não foi possível conectar ao servidor `{ip}:{port}`.\n**Erro:** {e}",
-                ephemeral=True
-            )
+        if guild_id not in active_connections:
+            await interaction.response.send_message("Nenhuma conexão ativa. Use /7dtd_addserver primeiro.", ephemeral=True)
             return
 
-        # Se chegou até aqui, significa que a conexão funcionou e a gente pegou algo em version_info
-        embed = discord.Embed(
-            title="7DTD Status",
-            description="**Conexão estabelecida com sucesso!**",
-            color=discord.Color.green()
+        conn = active_connections[guild_id]
+        response = await conn.send_command("gettime")
+        await interaction.response.send_message(
+            f"Resposta do servidor:\n```\n{response}\n```",
+            ephemeral=True
         )
-        embed.add_field(name="Servidor (IP:Porta)", value=f"{ip}:{port}", inline=False)
-        embed.add_field(name="Resposta do comando 'version':", value=version_info, inline=False)
-        # Caso queira exibir mais dados, você pode chamar outros comandos e adicionar mais fields
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @tasks.loop(seconds=60)
-    async def check_chat_loop(self):
-        """
-        Esta função roda a cada 60 segundos para buscar mensagens do servidor
-        e postar no canal designado. Aqui é só um exemplo simples que manda
-        uma mensagem 'checando chat...' sem de fato implementar RCON.
-        """
-        await self.bot.wait_until_ready()
-        with SessionLocal() as session:
-            configs = session.query(ServerConfig).all()
-
-        for cfg in configs:
-            if not cfg.channel_id:
-                continue
-            channel = self.bot.get_channel(int(cfg.channel_id))
-            if not channel:
-                continue
-
-            # Caso queira de fato implementar chat bridging:
-            # try:
-            #     with Client(cfg.ip, cfg.port, passwd=cfg.password) as client:
-            #         new_messages = client.run("getchat")
-            #         # Parse e poste no canal
-            # except:
-            #     pass
-
-            await channel.send(f"[Exemplo] Checando chat do servidor {cfg.ip}:{cfg.port}...")
 
 async def setup(bot):
     await bot.add_cog(SevenDaysCog(bot))
