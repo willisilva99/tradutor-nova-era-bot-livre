@@ -45,7 +45,7 @@ class TelnetConnection:
                 self.telnet.read_until(b"password:", timeout=5)
                 # Envia a senha
                 self.telnet.write(self.password.encode("utf-8") + b"\r\n")
-                # Espera prompt final (às vezes ">" ou similar)
+                # Espera prompt final (por exemplo, ">")
                 self.telnet.read_until(b">", timeout=5)
 
             while not self.stop_flag:
@@ -60,42 +60,85 @@ class TelnetConnection:
 
     def handle_line(self, line: str):
         """
-        Processa as linhas de saída do servidor.
-        Se for uma linha de chat com o formato:
-          Chat (from 'Steam_xxx', entity id '189', to 'Global'): 'Nome': Mensagem
-        extrai o nome e a mensagem usando regex e envia no canal
-        no formato: [chat] Nome: Mensagem.
+        Processa as linhas de saída do servidor e formata mensagens de eventos:
+        
+        • Se a linha corresponder a uma mensagem de chat no formato:
+            Chat (from 'Steam_xxx', entity id '...', to 'Global'): 'Nome': Mensagem
+          formata como: 💬 **[CHAT] Nome**: Mensagem
+
+        • Se corresponder a uma morte:
+            GMSG: Player 'Nome' died
+          formata como: 💀 **[CHAT] Nome** morreu
+
+        • Se corresponder a saída:
+            GMSG: Player 'Nome' left the game
+          formata como: 🚪 **[CHAT] Nome** saiu do jogo
+
+        • Se corresponder a entrada (join ou login):
+            GMSG: Player 'Nome' joined the game
+            ou
+            RequestToEnterGame: .../Nome
+          formata como: 🟢 **[CHAT] Nome** entrou no jogo
+
+        Caso não bata nenhum padrão, envia a linha original.
         """
         # Evita duplicatas
         if self.last_line == line:
             return
         self.last_line = line
 
-        if "Chat (from " in line:
-            # Regex para extrair: nome (grupo 4) e mensagem (grupo 5)
-            pattern = r"Chat \(from '([^']+)', entity id '([^']+)', to '([^']+)'\):\s*'([^']+)':\s*(.*)"
-            match = re.search(pattern, line)
-            if match:
-                player_name = match.group(4)
-                message = match.group(5)
-                formatted = f"[chat] {player_name}: {message}"
-            else:
-                # Caso não bata o padrão, envia a linha original
-                formatted = line
-            if self.channel_id:
-                channel = self.bot.get_channel(int(self.channel_id))
-                if channel:
-                    asyncio.run_coroutine_threadsafe(
-                        channel.send(formatted), self.bot.loop
-                    )
-        elif "GMSG" in line:
-            # Para mensagens GMSG, envie sem alteração
-            if self.channel_id:
-                channel = self.bot.get_channel(int(self.channel_id))
-                if channel:
-                    asyncio.run_coroutine_threadsafe(
-                        channel.send(f"[7DTD] {line}"), self.bot.loop
-                    )
+        formatted = None
+
+        # Verifica morte
+        death_pattern = r"GMSG: Player '([^']+)' died"
+        m = re.search(death_pattern, line)
+        if m:
+            name = m.group(1)
+            formatted = f"💀 **[CHAT] {name}** morreu"
+        
+        # Verifica saída
+        if not formatted:
+            leave_pattern = r"GMSG: Player '([^']+)' left the game"
+            m = re.search(leave_pattern, line)
+            if m:
+                name = m.group(1)
+                formatted = f"🚪 **[CHAT] {name}** saiu do jogo"
+        
+        # Verifica entrada (join)
+        if not formatted:
+            join_pattern = r"GMSG: Player '([^']+)' joined the game"
+            m = re.search(join_pattern, line)
+            if m:
+                name = m.group(1)
+                formatted = f"🟢 **[CHAT] {name}** entrou no jogo"
+        
+        # Verifica login (RequestToEnterGame)
+        if not formatted:
+            login_pattern = r"RequestToEnterGame: [^/]+/([^'\s]+)"
+            m = re.search(login_pattern, line)
+            if m:
+                name = m.group(1)
+                formatted = f"🟢 **[CHAT] {name}** entrou no jogo"
+        
+        # Verifica mensagem de chat padrão
+        if not formatted and "Chat (from " in line:
+            chat_pattern = r"Chat \(from '[^']+', entity id '[^']+', to '[^']+'\):\s*'([^']+)':\s*(.*)"
+            m = re.search(chat_pattern, line)
+            if m:
+                name = m.group(1)
+                message = m.group(2)
+                formatted = f"💬 **[CHAT] {name}**: {message}"
+        
+        # Se nenhum padrão bater, usa a linha original
+        if not formatted:
+            formatted = line
+
+        if self.channel_id:
+            channel = self.bot.get_channel(int(self.channel_id))
+            if channel:
+                asyncio.run_coroutine_threadsafe(
+                    channel.send(formatted), self.bot.loop
+                )
 
     def stop(self):
         """Para a thread e fecha a conexão."""
@@ -299,17 +342,16 @@ class SevenDaysCog(commands.Cog):
 
         lines = response.splitlines()
         total_msg = None
-        player_names = set()  # Utilizamos set para evitar duplicatas
+        player_names = set()  # Usamos set para evitar duplicatas
 
         for line in lines:
             line = line.strip()
             if line.startswith("Total of "):
                 total_msg = line
             elif "EntityID" in line:
-                # Ignora cabeçalho
-                continue
+                continue  # Ignora cabeçalho
             else:
-                # Supondo que o formato seja: "189 John ...", onde a segunda coluna é o nome
+                # Supomos que o formato seja: "189 John ..." onde a segunda coluna é o nome
                 parts = line.split()
                 if len(parts) >= 2:
                     name = parts[1].strip()
