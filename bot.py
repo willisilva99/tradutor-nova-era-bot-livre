@@ -85,7 +85,7 @@ async def traduzir(ctx, message_id: str = None):
         await ctx.send("Tempo esgotado. Por favor, tente novamente.")
         return
 
-    # Após reagir, deleta o prompt para não poluir o chat
+    # Após reagir, apaga o prompt para não poluir o chat
     try:
         await prompt.delete()
     except Exception as e:
@@ -101,16 +101,47 @@ async def traduzir(ctx, message_id: str = None):
     else:
         target_language = "pt"
 
-    # Indica que a tradução está em andamento e logo substitui com a tradução
+    # Envia mensagem temporária indicando que a tradução está em andamento
     msg = await ctx.send("Traduzindo...")
 
     try:
         translated_text = translate_text(target_message.content, target_language)
-        # Atualiza a mensagem com a tradução
+        # Edita a mensagem para mostrar somente a tradução
         await msg.edit(content=f"**Tradução ({target_language}):** {translated_text}")
     except Exception as e:
         await msg.edit(content="Houve um erro ao tentar traduzir a mensagem. Tente novamente mais tarde.")
         print("Exceção durante tradução:", e)
+        return
+
+    # Adiciona emojis para feedback: "👌" para positivo e "👎" para negativo
+    feedback_emojis = ["👌", "👎"]
+    for emoji in feedback_emojis:
+        try:
+            await msg.add_reaction(emoji)
+        except Exception as e:
+            print("Erro ao adicionar reação de feedback:", e)
+
+    # Filtro para capturar somente a reação do autor no feedback
+    def feedback_check(reaction, user):
+        return user == ctx.author and str(reaction.emoji) in feedback_emojis and reaction.message.id == msg.id
+
+    try:
+        reaction_fb, _ = await bot.wait_for("reaction_add", timeout=30.0, check=feedback_check)
+    except Exception:
+        # Se o tempo esgotar, não altera a mensagem
+        return
+
+    # Adiciona o feedback à mensagem editando seu conteúdo
+    if str(reaction_fb.emoji) == "👌":
+        feedback = "\n\nFeedback: Joia, tradução aprovada!"
+    elif str(reaction_fb.emoji) == "👎":
+        feedback = "\n\nFeedback: Tradução não aprovada."
+    else:
+        feedback = ""
+    try:
+        await msg.edit(content=f"{msg.content}{feedback}")
+    except Exception as e:
+        print("Erro ao editar a mensagem com feedback:", e)
 
 # Função principal para iniciar o bot utilizando a variável de ambiente (TOKEN)
 async def main():
