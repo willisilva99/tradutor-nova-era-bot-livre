@@ -1,17 +1,19 @@
 import os
 import discord
-from discord.ext import commands, tasks
+from discord import app_commands
+from discord.ext import tasks
 import asyncio
 import random
 from googletrans import Translator
 
-# Instancia o tradutor
+# Cria o objeto de intents e o cliente (bot) sem prefixo, pois usaremos slash commands
+intents = discord.Intents.all()
+bot = discord.Client(intents=intents)
+tree = app_commands.CommandTree(bot)
+
 translator = Translator()
 
-# Cria o bot com o prefixo "$" e os intents necessários
-bot = commands.Bot(command_prefix="$", intents=discord.Intents.all())
-
-# Lista de status que o bot exibirá periodicamente
+# Lista de status para alternar periodicamente
 STATUS_LIST = [
     "traduzindo",
     "mantando zumbi",
@@ -19,134 +21,63 @@ STATUS_LIST = [
     "nova era pve"
 ]
 
-# Função para traduzir o texto utilizando o googletrans
-def translate_text(text, target_language):
-    try:
-        result = translator.translate(text, dest=target_language)
-        return result.text
-    except Exception as e:
-        print("Erro na tradução:", e)
-        raise e
-
-# Evento on_ready: quando o bot estiver online, inicia a tarefa de status
 @bot.event
 async def on_ready():
-    print(f"Bot conectado como {bot.user.name}")
+    print(f"Bot conectado como {bot.user}")
+    try:
+        # Sincroniza os comandos de barra com o Discord
+        synced = await tree.sync()
+        print(f"Comandos de barra sincronizados: {len(synced)}")
+    except Exception as e:
+        print(f"Erro ao sincronizar comandos: {e}")
+
+    # Inicia a tarefa de mudança de status
     change_status.start()
 
-# Tarefa que alterna o status do bot a cada 5 minutos (ajuste conforme necessário)
 @tasks.loop(minutes=5)
 async def change_status():
     status = random.choice(STATUS_LIST)
     await bot.change_presence(activity=discord.Game(name=status))
     print(f"Status atualizado para: {status}")
 
-# Comando $traduzir
-@bot.command(name="traduzir")
-async def traduzir(ctx, message_id: str = None):
-    target_message = None
-
-    # Se o comando for usado como resposta a uma mensagem
-    if ctx.message.reference:
-        try:
-            target_message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
-        except Exception:
-            await ctx.send("Não foi possível recuperar a mensagem referenciada.")
-            return
-    # Se o usuário fornecer um ID de mensagem
-    elif message_id:
-        try:
-            target_message = await ctx.channel.fetch_message(message_id)
-        except Exception:
-            await ctx.send("Não foi possível encontrar a mensagem com o ID fornecido.")
-            return
-    else:
-        await ctx.send("Por favor, responda a mensagem que deseja traduzir ou forneça o ID da mensagem.")
-        return
-
-    # Envia mensagem de prompt com as opções de idioma (bandeiras)
-    prompt = await ctx.send(
-        "Escolha o idioma para tradução:\n"
-        "🇧🇷 - Português\n"
-        "🇺🇸 - Inglês\n"
-        "🇪🇸 - Espanhol"
-    )
-    emojis = ["🇧🇷", "🇺🇸", "🇪🇸"]
-    for emoji in emojis:
-        await prompt.add_reaction(emoji)
-
-    # Filtro para capturar somente a reação do autor na mensagem de prompt
-    def check(reaction, user):
-        return user == ctx.author and str(reaction.emoji) in emojis and reaction.message.id == prompt.id
-
+# Função de tradução usando googletrans
+def translate_text(text: str, dest: str) -> str:
     try:
-        reaction, _ = await bot.wait_for("reaction_add", timeout=30.0, check=check)
-    except Exception:
-        await ctx.send("Tempo esgotado. Por favor, tente novamente.")
-        return
-
-    # Após reagir, apaga o prompt para não poluir o chat
-    try:
-        await prompt.delete()
+        result = translator.translate(text, dest=dest)
+        return result.text
     except Exception as e:
-        print("Não foi possível apagar a mensagem de prompt:", e)
+        print(f"Erro na tradução: {e}")
+        return None
 
-    # Mapeia a reação escolhida para o código do idioma
-    if str(reaction.emoji) == "🇧🇷":
-        target_language = "pt"
-    elif str(reaction.emoji) == "🇺🇸":
-        target_language = "en"
-    elif str(reaction.emoji) == "🇪🇸":
-        target_language = "es"
-    else:
-        target_language = "pt"
-
-    # Envia mensagem temporária indicando que a tradução está em andamento
-    msg = await ctx.send("Traduzindo...")
-
-    try:
-        translated_text = translate_text(target_message.content, target_language)
-        # Edita a mensagem para mostrar somente a tradução
-        await msg.edit(content=f"**Tradução ({target_language}):** {translated_text}")
-    except Exception as e:
-        await msg.edit(content="Houve um erro ao tentar traduzir a mensagem. Tente novamente mais tarde.")
-        print("Exceção durante tradução:", e)
+# Definindo um slash command para traduzir
+# /traduzir texto: "Frase aqui" idioma: "pt/en/es"
+@tree.command(name="traduzir", description="Traduza um texto para Português, Inglês ou Espanhol.")
+@app_commands.describe(
+    texto="O texto que você deseja traduzir",
+    idioma="Idioma de destino (pt, en ou es)"
+)
+async def slash_traduzir(interaction: discord.Interaction, texto: str, idioma: str):
+    # Verifica se o idioma está entre os suportados
+    if idioma not in ["pt", "en", "es"]:
+        await interaction.response.send_message(
+            "Idiomas suportados: `pt` (Português), `en` (Inglês) ou `es` (Espanhol).",
+            ephemeral=True
+        )
         return
 
-    # Adiciona emojis para feedback: "👌" para positivo e "👎" para negativo
-    feedback_emojis = ["👌", "👎"]
-    for emoji in feedback_emojis:
-        try:
-            await msg.add_reaction(emoji)
-        except Exception as e:
-            print("Erro ao adicionar reação de feedback:", e)
-
-    # Filtro para capturar somente a reação do autor no feedback
-    def feedback_check(reaction, user):
-        return user == ctx.author and str(reaction.emoji) in feedback_emojis and reaction.message.id == msg.id
-
-    try:
-        reaction_fb, _ = await bot.wait_for("reaction_add", timeout=30.0, check=feedback_check)
-    except Exception:
-        # Se o tempo esgotar, não altera a mensagem
+    await interaction.response.defer(thinking=True)  # Mostra que o bot está "pensando"
+    traducao = translate_text(texto, idioma)
+    if not traducao:
+        await interaction.followup.send("Houve um erro ao traduzir o texto. Tente novamente mais tarde.")
         return
 
-    # Adiciona o feedback à mensagem editando seu conteúdo
-    if str(reaction_fb.emoji) == "👌":
-        feedback = "\n\nFeedback: Joia, tradução aprovada!"
-    elif str(reaction_fb.emoji) == "👎":
-        feedback = "\n\nFeedback: Tradução não aprovada."
-    else:
-        feedback = ""
-    try:
-        await msg.edit(content=f"{msg.content}{feedback}")
-    except Exception as e:
-        print("Erro ao editar a mensagem com feedback:", e)
+    # Envia a resposta final
+    await interaction.followup.send(f"**Tradução ({idioma}):** {traducao}")
 
-# Função principal para iniciar o bot utilizando a variável de ambiente (TOKEN)
+# Função principal para rodar o bot
 async def main():
-    async with bot:
-        await bot.start(os.getenv("TOKEN"))
+    # Executa o bot usando a variável de ambiente TOKEN (Railway)
+    await bot.start(os.getenv("TOKEN"))
 
 if __name__ == "__main__":
     asyncio.run(main())
