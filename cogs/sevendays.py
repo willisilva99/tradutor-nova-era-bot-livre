@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 import asyncio
 import telnetlib
 import threading
+import re
 
 from db import SessionLocal, ServerConfig
 
@@ -28,6 +29,7 @@ class TelnetConnection:
         self.thread = None
         self.stop_flag = False
         self.lock = threading.Lock()
+        self.last_line = None  # Para evitar duplicatas
 
     def start(self):
         """Inicia a thread que conecta e fica lendo as linhas do telnet."""
@@ -58,16 +60,40 @@ class TelnetConnection:
 
     def handle_line(self, line: str):
         """
-        Se quiser implementar "chat bridging", verifique se a linha contém
-        "Chat (from ..." ou "GMSG" e envie para o canal configurado.
+        Processa as linhas recebidas.
+        Para linhas de chat no formato:
+          Chat (from 'Nome', entity id '...', to 'Global'): Mensagem
+        extrai o nome e a mensagem e envia no canal configurado no formato:
+          [chat] Nome: Mensagem
+        Evita duplicatas se a mesma linha for recebida consecutivamente.
         """
-        if "Chat (from " in line or "GMSG" in line:
+        # Evita duplicação: se a linha for igual à última processada, ignora
+        if self.last_line == line:
+            return
+        self.last_line = line
+
+        # Verifica se é mensagem de chat
+        if "Chat (from " in line:
+            # Exemplo de formato: 
+            # Chat (from 'John', entity id '123', to 'Global'): Hello everyone!
+            pattern = r"Chat \(from '([^']+)'[^)]*\):\s*(.*)"
+            match = re.search(pattern, line)
+            if match:
+                player = match.group(1)
+                message = match.group(2)
+                formatted = f"[chat] {player}: {message}"
+            else:
+                formatted = line
             if self.channel_id:
                 channel = self.bot.get_channel(int(self.channel_id))
                 if channel:
-                    asyncio.run_coroutine_threadsafe(
-                        channel.send(f"[7DTD] {line}"), self.bot.loop
-                    )
+                    asyncio.run_coroutine_threadsafe(channel.send(formatted), self.bot.loop)
+        elif "GMSG" in line:
+            # Para mensagens GMSG, pode enviar conforme necessário (ou tratar de forma específica)
+            if self.channel_id:
+                channel = self.bot.get_channel(int(self.channel_id))
+                if channel:
+                    asyncio.run_coroutine_threadsafe(channel.send(f"[7DTD] {line}"), self.bot.loop)
 
     def stop(self):
         """Para a thread e fecha a conexão."""
@@ -247,7 +273,7 @@ class SevenDaysCog(commands.Cog):
     async def players_online(self, interaction: discord.Interaction):
         """
         Executa "listplayers" para obter nomes de jogadores online e exibe num embed.
-        Remove duplicatas.
+        Remove duplicatas e exibe no formato: [chat] Nome: Mensagem.
         """
         await interaction.response.defer(thinking=True, ephemeral=True)
         guild_id = str(interaction.guild_id)
@@ -262,34 +288,38 @@ class SevenDaysCog(commands.Cog):
                 conn.start()
         conn = active_connections[guild_id]
         try:
+            # Usamos "listplayers" para obter os nomes
             response = await conn.send_command("listplayers")
         except Exception as e:
             await interaction.followup.send(f"Erro ao executar comando listplayers: {e}", ephemeral=True)
             return
 
         lines = response.splitlines()
-        player_names = []
         total_msg = None
+        player_names = set()  # set para evitar duplicatas
+
         for line in lines:
             line = line.strip()
             if line.startswith("Total of "):
                 total_msg = line
             elif "EntityID" in line:
-                # Ignora cabeçalho
+                # Cabeçalho, ignora
                 continue
             else:
+                # Supomos que o formato seja: "189 John ..." onde a segunda coluna é o nome
                 parts = line.split()
                 if len(parts) >= 2:
-                    name = parts[1]
-                    if name not in player_names:
-                        player_names.append(name)
+                    name = parts[1].strip()
+                    if name:
+                        player_names.add(name)
 
         if total_msg is None:
             total_msg = "Não encontrei a contagem total de players."
         if player_names:
-            players_str = ", ".join(player_names)
+            players_str = ", ".join(sorted(player_names))
         else:
             players_str = "Nenhum player listado."
+
         embed = discord.Embed(
             title="Jogadores Online",
             description=f"{total_msg}\n\n**Lista**: {players_str}",
