@@ -1,9 +1,12 @@
 import os
 import discord
 from discord.ext import commands, tasks
-import requests
 import asyncio
 import random
+from googletrans import Translator
+
+# Instancia o tradutor
+translator = Translator()
 
 # Cria o bot com o prefixo "$" e os intents necessários
 bot = commands.Bot(command_prefix="$", intents=discord.Intents.all())
@@ -16,22 +19,15 @@ STATUS_LIST = [
     "nova era pve"
 ]
 
-# Função para traduzir o texto utilizando a API do LibreTranslate (endpoint alternativo)
+# Função para traduzir o texto utilizando o googletrans
 def translate_text(text, target_language):
-    # Utilizando endpoint alternativo do LibreTranslate
-    url = "https://libretranslate.de/translate"
-    payload = {
-        "q": text,
-        "source": "auto",   # Detecta automaticamente o idioma da mensagem
-        "target": target_language,
-        "format": "text"
-    }
-    headers = {"Content-Type": "application/json"}
-    response = requests.post(url, json=payload, headers=headers)
-    if response.status_code != 200:
-        print("Erro na tradução:", response.text)
-    response.raise_for_status()
-    return response.json()["translatedText"]
+    # target_language deve ser "pt", "en" ou "es"
+    try:
+        result = translator.translate(text, dest=target_language)
+        return result.text
+    except Exception as e:
+        print("Erro na tradução:", e)
+        raise e
 
 # Evento on_ready: quando o bot estiver online, sincroniza e inicia a tarefa de status
 @bot.event
@@ -39,7 +35,7 @@ async def on_ready():
     print(f"Bot conectado como {bot.user.name}")
     change_status.start()
 
-# Tarefa que alterna o status do bot a cada 5 minutos (você pode ajustar esse intervalo)
+# Tarefa que alterna o status do bot a cada 5 minutos (ajuste conforme necessário)
 @tasks.loop(minutes=5)
 async def change_status():
     status = random.choice(STATUS_LIST)
@@ -51,7 +47,7 @@ async def change_status():
 async def traduzir(ctx, message_id: str = None):
     target_message = None
 
-    # Se o comando for usado em resposta a uma mensagem
+    # Se o comando for usado como resposta a uma mensagem
     if ctx.message.reference:
         try:
             target_message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
@@ -80,7 +76,7 @@ async def traduzir(ctx, message_id: str = None):
     for emoji in emojis:
         await prompt.add_reaction(emoji)
 
-    # Define o filtro para capturar somente a reação do autor do comando na mensagem de prompt
+    # Filtro para capturar somente a reação do autor na mensagem de prompt
     def check(reaction, user):
         return user == ctx.author and str(reaction.emoji) in emojis and reaction.message.id == prompt.id
 
@@ -109,7 +105,7 @@ async def traduzir(ctx, message_id: str = None):
         await ctx.send("Houve um erro ao tentar traduzir a mensagem. Tente novamente mais tarde.")
         print("Exceção durante tradução:", e)
 
-# Função principal para iniciar o bot utilizando a variável de ambiente (TOKEN) configurada no Railway
+# Função principal para iniciar o bot utilizando a variável de ambiente (TOKEN)
 async def main():
     async with bot:
         await bot.start(os.getenv("TOKEN"))
