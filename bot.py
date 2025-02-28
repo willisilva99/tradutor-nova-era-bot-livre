@@ -21,7 +21,6 @@ STATUS_LIST = [
 
 # Função para traduzir o texto utilizando o googletrans
 def translate_text(text, target_language):
-    # target_language deve ser "pt", "en" ou "es"
     try:
         result = translator.translate(text, dest=target_language)
         return result.text
@@ -29,7 +28,7 @@ def translate_text(text, target_language):
         print("Erro na tradução:", e)
         raise e
 
-# Evento on_ready: quando o bot estiver online, sincroniza e inicia a tarefa de status
+# Evento on_ready: quando o bot estiver online, inicia a tarefa de status
 @bot.event
 async def on_ready():
     print(f"Bot conectado como {bot.user.name}")
@@ -65,7 +64,7 @@ async def traduzir(ctx, message_id: str = None):
         await ctx.send("Por favor, responda a mensagem que deseja traduzir ou forneça o ID da mensagem.")
         return
 
-    # Envia uma mensagem de prompt com as opções de idioma (bandeiras)
+    # Envia mensagem de prompt com as opções de idioma (bandeiras)
     prompt = await ctx.send(
         "Escolha o idioma para tradução:\n"
         "🇧🇷 - Português\n"
@@ -86,6 +85,12 @@ async def traduzir(ctx, message_id: str = None):
         await ctx.send("Tempo esgotado. Por favor, tente novamente.")
         return
 
+    # Após reagir, deleta o prompt para não poluir o chat
+    try:
+        await prompt.delete()
+    except Exception as e:
+        print("Não foi possível apagar a mensagem de prompt:", e)
+
     # Mapeia a reação escolhida para o código do idioma
     if str(reaction.emoji) == "🇧🇷":
         target_language = "pt"
@@ -96,13 +101,15 @@ async def traduzir(ctx, message_id: str = None):
     else:
         target_language = "pt"
 
-    await ctx.send("Traduzindo...")
+    # Indica que a tradução está em andamento e logo substitui com a tradução
+    msg = await ctx.send("Traduzindo...")
 
     try:
         translated_text = translate_text(target_message.content, target_language)
-        await ctx.send(f"**Tradução ({target_language}):** {translated_text}")
+        # Atualiza a mensagem com a tradução
+        await msg.edit(content=f"**Tradução ({target_language}):** {translated_text}")
     except Exception as e:
-        await ctx.send("Houve um erro ao tentar traduzir a mensagem. Tente novamente mais tarde.")
+        await msg.edit(content="Houve um erro ao tentar traduzir a mensagem. Tente novamente mais tarde.")
         print("Exceção durante tradução:", e)
 
 # Função principal para iniciar o bot utilizando a variável de ambiente (TOKEN)
