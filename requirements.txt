@@ -1,2 +1,2 @@
-discord.py
-googletrans==4.0.0rc1
+discord.py==2.1.0
+googletrans==4.0.0-rc1
