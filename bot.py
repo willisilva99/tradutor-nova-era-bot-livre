@@ -5,10 +5,10 @@ import requests
 import asyncio
 import random
 
-# Cria o bot com o prefixo "$" e com todos os intents necessários
+# Cria o bot com o prefixo "$" e os intents necessários
 bot = commands.Bot(command_prefix="$", intents=discord.Intents.all())
 
-# Lista de status que o bot exibirá
+# Lista de status que o bot exibirá periodicamente
 STATUS_LIST = [
     "traduzindo",
     "mantando zumbi",
@@ -16,9 +16,9 @@ STATUS_LIST = [
     "nova era pve"
 ]
 
-# Função para traduzir o texto utilizando a API do LibreTranslate
+# Função para traduzir o texto utilizando a API do LibreTranslate (endpoint alternativo)
 def translate_text(text, target_language):
-    url = "https://libretranslate.com/translate"
+    url = "https://translate.astian.org/translate"  # Endpoint alternativo
     payload = {
         "q": text,
         "source": "auto",   # Detecta automaticamente o idioma da mensagem
@@ -27,17 +27,19 @@ def translate_text(text, target_language):
     }
     headers = {"Content-Type": "application/json"}
     response = requests.post(url, json=payload, headers=headers)
+    # Caso a resposta não seja 200, exibe o erro retornado
+    if response.status_code != 200:
+        print("Erro na tradução:", response.text)
     response.raise_for_status()
     return response.json()["translatedText"]
 
-# Evento on_ready: quando o bot estiver online
+# Evento on_ready: quando o bot estiver online, sincroniza e inicia a tarefa de status
 @bot.event
 async def on_ready():
-    print(f'Bot conectado como {bot.user.name}')
-    # Inicia a tarefa que altera o status periodicamente
+    print(f"Bot conectado como {bot.user.name}")
     change_status.start()
 
-# Tarefa que alterna o status do bot a cada 5 minutos (ajuste o intervalo conforme desejar)
+# Tarefa que alterna o status do bot a cada 5 minutos (você pode ajustar esse intervalo)
 @tasks.loop(minutes=5)
 async def change_status():
     status = random.choice(STATUS_LIST)
@@ -49,7 +51,7 @@ async def change_status():
 async def traduzir(ctx, message_id: str = None):
     target_message = None
 
-    # Se o comando for usado como resposta a uma mensagem
+    # Se o comando for usado em resposta a uma mensagem
     if ctx.message.reference:
         try:
             target_message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
@@ -67,7 +69,7 @@ async def traduzir(ctx, message_id: str = None):
         await ctx.send("Por favor, responda a mensagem que deseja traduzir ou forneça o ID da mensagem.")
         return
 
-    # Envia uma mensagem com as opções de idioma (bandeiras)
+    # Envia uma mensagem de prompt com as opções de idioma (bandeiras)
     prompt = await ctx.send(
         "Escolha o idioma para tradução:\n"
         "🇧🇷 - Português\n"
@@ -78,7 +80,7 @@ async def traduzir(ctx, message_id: str = None):
     for emoji in emojis:
         await prompt.add_reaction(emoji)
 
-    # Define o filtro para aceitar apenas a reação do autor do comando
+    # Define o filtro para capturar somente a reação do autor do comando na mensagem de prompt
     def check(reaction, user):
         return user == ctx.author and str(reaction.emoji) in emojis and reaction.message.id == prompt.id
 
@@ -105,9 +107,9 @@ async def traduzir(ctx, message_id: str = None):
         await ctx.send(f"**Tradução ({target_language}):** {translated_text}")
     except Exception as e:
         await ctx.send("Houve um erro ao tentar traduzir a mensagem. Tente novamente mais tarde.")
-        print(e)
+        print("Exceção durante tradução:", e)
 
-# Função principal para iniciar o bot usando a variável de ambiente do Railway
+# Função principal para iniciar o bot utilizando a variável de ambiente (TOKEN) configurada no Railway
 async def main():
     async with bot:
         await bot.start(os.getenv("TOKEN"))
