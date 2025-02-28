@@ -1,3 +1,5 @@
+# cogs/sevendays.py
+
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -8,7 +10,7 @@ import threading
 
 from db import SessionLocal, ServerConfig
 
-# Dicionário global para armazenar conexões: guild_id -> TelnetConnection
+# Dicionário global para armazenar conexões Telnet: guild_id -> TelnetConnection
 active_connections = {}
 
 class TelnetConnection:
@@ -103,6 +105,7 @@ class TelnetConnection:
                 return data.decode("utf-8", errors="ignore")
             except EOFError:
                 return "EOF durante leitura"
+
 
 class SevenDaysCog(commands.Cog):
     """
@@ -293,7 +296,7 @@ class SevenDaysCog(commands.Cog):
     @app_commands.command(name="7dtd_players", description="Lista quantos/quais jogadores estão online no 7DTD.")
     async def players_online(self, interaction: discord.Interaction):
         """
-        Executa "lp" (ou "listplayers") para ver quem está online
+        Executa "listplayers" para ver quem está online (nomes)
         e mostra num embed.
         """
         await interaction.response.defer(thinking=True, ephemeral=True)
@@ -319,27 +322,30 @@ class SevenDaysCog(commands.Cog):
         conn = active_connections[guild_id]
 
         try:
-            response = await conn.send_command("lp")
+            # Tenta usar "listplayers" para obter nomes
+            response = await conn.send_command("listplayers")
         except Exception as e:
-            await interaction.followup.send(f"Erro ao executar comando lp: {e}", ephemeral=True)
+            await interaction.followup.send(f"Erro ao executar comando listplayers: {e}", ephemeral=True)
             return
 
         lines = response.splitlines()
         player_names = []
         total_msg = None
+
         for line in lines:
             line = line.strip()
             if line.startswith("Total of "):
+                # Ex: "Total of 2 in the game"
                 total_msg = line
             elif "EntityID" in line:
                 # cabeçalho
                 pass
             else:
+                # Exemplo de linha: "189 John 000012345 ..."
                 parts = line.split()
                 if len(parts) >= 2:
                     name = parts[1]
-                    if name not in ("SteamID", "PlayerName"):
-                        player_names.append(name)
+                    player_names.append(name)
 
         if total_msg is None:
             total_msg = "Não encontrei a contagem total de players."
@@ -351,10 +357,7 @@ class SevenDaysCog(commands.Cog):
 
         embed = discord.Embed(
             title="Jogadores Online",
-            description=(
-                f"{total_msg}\n\n"
-                f"**Lista**: {players_str}"
-            ),
+            description=f"{total_msg}\n\n**Lista**: {players_str}",
             color=discord.Color.blue()
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
