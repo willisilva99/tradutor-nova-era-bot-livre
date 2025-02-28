@@ -1,168 +1,45 @@
 # cogs/sevendays.py
+
 import discord
 from discord.ext import commands
 from discord import app_commands
 from sqlalchemy.orm import Session
-import telnetlib
-import threading
 import asyncio
 
 from db import SessionLocal, ServerConfig
 
-# Dicionário global: guild_id -> TelnetConnection
-active_connections = {}
-
-class TelnetConnection:
-    def __init__(self, guild_id, ip, port, password, channel_id, bot):
-        self.guild_id = guild_id
-        self.ip = ip
-        self.port = port
-        self.password = password
-        self.channel_id = channel_id
-        self.bot = bot
-
-        self.telnet = None
-        self.thread = None
-        self.stop_flag = False
-        self.lock = threading.Lock()
-
-    def start(self):
-        self.thread = threading.Thread(target=self.run, daemon=True)
-        self.thread.start()
-
-    def run(self):
-        try:
-            with self.lock:
-                self.telnet = telnetlib.Telnet(self.ip, self.port, timeout=10)
-                self.telnet.read_until(b"password:", timeout=5)
-                self.telnet.write(self.password.encode("utf-8") + b"\r\n")
-                self.telnet.read_until(b">", timeout=5)
-
-            while not self.stop_flag:
-                line = self.telnet.read_until(b"\n", timeout=1)
-                if line:
-                    decoded = line.decode("utf-8", errors="ignore").strip()
-                    if decoded:
-                        self.handle_line(decoded)
-        except Exception as e:
-            print(f"[TelnetConnection][guild={self.guild_id}] Erro: {e}")
-        print(f"[TelnetConnection][guild={self.guild_id}] Encerrada.")
-
-    def handle_line(self, line: str):
-        # Exemplo: se contiver “Chat (from ”, repassar pro canal
-        if "Chat (from " in line or "GMSG" in line:
-            if self.channel_id:
-                ch = self.bot.get_channel(int(self.channel_id))
-                if ch:
-                    asyncio.run_coroutine_threadsafe(ch.send(f"[7DTD] {line}"), self.bot.loop)
-
-    def stop(self):
-        self.stop_flag = True
-        with self.lock:
-            if self.telnet:
-                self.telnet.write(b"exit\r\n")
-                self.telnet.close()
-        if self.thread and self.thread.is_alive():
-            self.thread.join()
-
-    async def send_command(self, cmd: str, wait_prompt=True) -> str:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._send_blocking, cmd, wait_prompt)
-
-    def _send_blocking(self, cmd: str, wait_prompt: bool) -> str:
-        with self.lock:
-            if not self.telnet:
-                return "Conexão Telnet não iniciada."
-            self.telnet.write(cmd.encode("utf-8") + b"\r\n")
-            if wait_prompt:
-                data = self.telnet.read_until(b">", timeout=3)
-                return data.decode("utf-8", errors="ignore")
-            else:
-                return ""
+# Supondo que já existam:
+# active_connections = {}
+# class TelnetConnection: ...
 
 class SevenDaysCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="7dtd_addserver", description="Adiciona ou atualiza um servidor 7DTD para este Discord.")
-    async def addserver(self, interaction: discord.Interaction, ip: str, port: int, password: str):
-        await interaction.response.defer(thinking=True, ephemeral=True)
+    # ... seus outros comandos (addserver, channel, test, etc.) ...
 
-        guild_id = str(interaction.guild_id)
-        with SessionLocal() as session:
-            cfg = session.query(ServerConfig).filter_by(guild_id=guild_id).first()
-            if not cfg:
-                cfg = ServerConfig(guild_id=guild_id)
-                session.add(cfg)
-            cfg.ip = ip
-            cfg.port = port
-            cfg.password = password
-            session.commit()
-
-        # Para antiga conexao se existir
-        if guild_id in active_connections:
-            active_connections[guild_id].stop()
-            del active_connections[guild_id]
-
-        # Cria nova
-        channel_id = cfg.channel_id
-        conn = TelnetConnection(guild_id, ip, port, password, channel_id, self.bot)
-        active_connections[guild_id] = conn
-        conn.start()
-
-        await interaction.followup.send(
-            f"Servidor 7DTD configurado!\nIP: `{ip}`, Porta: `{port}`",
-            ephemeral=True
-        )
-
-    @app_commands.command(name="7dtd_channel", description="Define canal para receber chat do servidor 7DTD.")
-    async def set_channel(self, interaction: discord.Interaction, canal: discord.TextChannel):
-        await interaction.response.defer(thinking=True, ephemeral=True)
-        guild_id = str(interaction.guild_id)
-
-        with SessionLocal() as session:
-            cfg = session.query(ServerConfig).filter_by(guild_id=guild_id).first()
-            if not cfg:
-                await interaction.followup.send(
-                    "Nenhum servidor configurado. Use /7dtd_addserver primeiro.",
-                    ephemeral=True
-                )
-                return
-            cfg.channel_id = str(canal.id)
-            session.commit()
-
-        # Se tiver conexão ativa, atualiza
-        if guild_id in active_connections:
-            active_connections[guild_id].channel_id = str(canal.id)
-
-        await interaction.followup.send(
-            f"Canal definido: {canal.mention}",
-            ephemeral=True
-        )
-
-    @app_commands.command(name="7dtd_test", description="Verifica a conexão chamando o comando 'version'.")
-    async def test_connection(self, interaction: discord.Interaction):
+    @app_commands.command(name="7dtd_bloodmoon", description="Mostra quando ocorre a próxima lua de sangue.")
+    async def bloodmoon_status(self, interaction: discord.Interaction):
         """
-        Tenta enviar 'version'. Se a conexão não existir em active_connections,
-        tentamos ler do DB e criar na hora. Se não houver DB, pedimos /7dtd_addserver.
+        Exemplo:
+        - Chama "gettime" no servidor
+        - Faz parse de algo tipo "Day 14, 12:34"
+        - Computa quanta hora/dia falta até a lua de sangue
+        - Exibe resultado
         """
         await interaction.response.defer(thinking=True, ephemeral=True)
-
         guild_id = str(interaction.guild_id)
 
-        # 1) Se não existir no active_connections, tenta recriar do DB
+        # Certifica-se de ter a conexão em active_connections
+        # (ou tente recriar do DB se não existir, caso use esse padrão)
         if guild_id not in active_connections:
+            # Tenta recriar do DB
             with SessionLocal() as session:
                 cfg = session.query(ServerConfig).filter_by(guild_id=guild_id).first()
                 if not cfg:
-                    # sem config no DB
-                    await interaction.followup.send(
-                        "Nenhum servidor cadastrado no DB. Use /7dtd_addserver primeiro.",
-                        ephemeral=True
-                    )
+                    await interaction.followup.send("Nenhum servidor configurado. Use /7dtd_addserver primeiro.", ephemeral=True)
                     return
-
-                # Cria a conexão
+                from cogs.sevendays import TelnetConnection
                 conn = TelnetConnection(
                     guild_id=guild_id,
                     ip=cfg.ip,
@@ -174,18 +51,175 @@ class SevenDaysCog(commands.Cog):
                 active_connections[guild_id] = conn
                 conn.start()
 
-        # 2) Agora existe
         conn = active_connections[guild_id]
 
-        # 3) Manda "version"
+        # Comando "gettime"
         try:
-            result = await conn.send_command("version")
+            response = await conn.send_command("gettime")
+        except Exception as e:
+            await interaction.followup.send(f"Erro ao obter horário do servidor: {e}", ephemeral=True)
+            return
+
+        # Normalmente, se o servidor retorna algo como "Day 14, 12:34"
+        # Precisamos fazer parse.
+        day = None
+        hour = None
+        minute = 0
+        lines = response.splitlines()
+        for line in lines:
+            line = line.strip()
+            # Ex: "Day 14, 12:34"
+            if line.startswith("Day "):
+                # Tenta extrair "14" e "12:34"
+                # Formato exato pode variar; ajuste se necessário.
+                # Ex: "Day 14, 12:34"
+                parts = line.replace("Day ", "").split(",")  # ["14", "12:34"]
+                if len(parts) == 2:
+                    try:
+                        day_str = parts[0].strip()
+                        time_str = parts[1].strip()  # "12:34"
+                        day = int(day_str)
+                        # Agora separa hour:minute
+                        hm = time_str.split(":")
+                        if len(hm) == 2:
+                            hour = int(hm[0])
+                            minute = int(hm[1])
+                    except:
+                        pass
+
+        if day is None or hour is None:
+            # Não achamos um valor parseável
             await interaction.followup.send(
-                f"**Resultado:**\n```\n{result}\n```",
+                f"Não foi possível parsear o horário no output:\n```\n{response}\n```",
                 ephemeral=True
             )
+            return
+
+        # Supondo horda a cada 7 dias
+        # A horda acontece no dia divisível por 7, a partir das 22h até ~4h
+        # Exemplo simples:
+        horde_freq = 7
+
+        # Verifica se hoje é dia de horda
+        daysFromHorde = day % horde_freq  # resto
+        # Se daysFromHorde == 0 => dia de horda
+        # Horda começa ~22h e vai até ~4h do dia seguinte
+
+        # Monta mensagem
+        message = f"Hoje é **Dia {day}, {hour:02d}:{minute:02d}** no servidor."
+
+        # Lógica rápida:
+        if daysFromHorde == 0:
+            # É dia de horda
+            if hour >= 22 or hour < 4:
+                message += "\n**A horda está acontecendo agora!**"
+            elif hour < 22:
+                hrs_left = 22 - hour
+                message += f"\n**A horda começa em {hrs_left} hora(s).**"
+            else:
+                # passou das 4h do dia do horde => a horda acabou
+                # e a próxima deve ser no dia + 7
+                next_day = day + 7
+                message += f"\nA horda de hoje já passou! Próxima no **Dia {next_day}**."
+        else:
+            # não é dia de horda
+            # quantos dias faltam
+            days_to_horde = horde_freq - daysFromHorde
+            next_horde_day = day + days_to_horde
+            message += f"\nPróxima lua de sangue no **Dia {next_horde_day}** (em {days_to_horde} dia(s))."
+
+        await interaction.followup.send(message, ephemeral=True)
+
+    @app_commands.command(name="7dtd_players", description="Lista quantos/quais jogadores estão online no 7DTD.")
+    async def players_online(self, interaction: discord.Interaction):
+        """
+        Exemplo:
+        - Chama "lp" no servidor
+        - Tenta parsear algo como:
+            "Total of 3 in the game"
+            "EntityID   PlayerName ..."
+            ...
+        - Monta embed com a lista
+        """
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        guild_id = str(interaction.guild_id)
+
+        if guild_id not in active_connections:
+            with SessionLocal() as session:
+                cfg = session.query(ServerConfig).filter_by(guild_id=guild_id).first()
+                if not cfg:
+                    await interaction.followup.send("Nenhum servidor configurado. Use /7dtd_addserver primeiro.", ephemeral=True)
+                    return
+                from cogs.sevendays import TelnetConnection
+                conn = TelnetConnection(
+                    guild_id=guild_id,
+                    ip=cfg.ip,
+                    port=cfg.port,
+                    password=cfg.password,
+                    channel_id=cfg.channel_id,
+                    bot=self.bot
+                )
+                active_connections[guild_id] = conn
+                conn.start()
+
+        conn = active_connections[guild_id]
+
+        try:
+            response = await conn.send_command("lp")
         except Exception as e:
-            await interaction.followup.send(f"Erro ao executar comando: {e}", ephemeral=True)
+            await interaction.followup.send(f"Erro ao executar comando lp: {e}", ephemeral=True)
+            return
+
+        # Exemplo de resposta:
+        # Total of 3 in the game
+        # EntityID    PlayerName ...
+        # 178         John ...
+        # 101         Mary ...
+        # 13          Bob ...
+        lines = response.splitlines()
+        player_names = []
+        total_msg = None
+
+        for line in lines:
+            line = line.strip()
+            if line.startswith("Total of "):
+                total_msg = line  # Ex: "Total of 3 in the game"
+            elif "EntityID" in line:
+                # cabeçalho, ignora
+                pass
+            else:
+                # pode ser um player. Ex:
+                # "178 John <SteamId> ..."
+                # Vamos pegar a 2ª coluna como nome,
+                # mas real parse depende do layout
+                parts = line.split()
+                if len(parts) >= 2:
+                    # parts[0] = entityID, parts[1] = nome
+                    name = parts[1]
+                    # Se for algo sem
+                    if name not in ("SteamID", "PlayerName"):
+                        player_names.append(name)
+
+        # Monta a mensagem final
+        if total_msg is None:
+            # sem info de total?
+            total_msg = "Não encontrei quantidade total de players."
+
+        if player_names:
+            players_str = ", ".join(player_names)
+        else:
+            players_str = "Nenhum player listado."
+
+        embed = discord.Embed(
+            title="Jogadores Online",
+            description=(
+                f"{total_msg}\n\n"
+                f"**Lista**: {players_str}"
+            ),
+            color=discord.Color.blue()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(SevenDaysCog(bot))
