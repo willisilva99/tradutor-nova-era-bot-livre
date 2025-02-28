@@ -18,7 +18,8 @@ STATUS_LIST = [
 
 # Função para traduzir o texto utilizando a API do LibreTranslate (endpoint alternativo)
 def translate_text(text, target_language):
-    url = "https://translate.astian.org/translate"  # Endpoint alternativo
+    # Utilizando endpoint alternativo do LibreTranslate
+    url = "https://libretranslate.de/translate"
     payload = {
         "q": text,
         "source": "auto",   # Detecta automaticamente o idioma da mensagem
@@ -27,7 +28,6 @@ def translate_text(text, target_language):
     }
     headers = {"Content-Type": "application/json"}
     response = requests.post(url, json=payload, headers=headers)
-    # Caso a resposta não seja 200, exibe o erro retornado
     if response.status_code != 200:
         print("Erro na tradução:", response.text)
     response.raise_for_status()
