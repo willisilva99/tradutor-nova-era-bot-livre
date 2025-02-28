@@ -10,9 +10,6 @@ from googletrans import Translator
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="$", intents=intents)
 
-# Slash Commands
-tree = app_commands.CommandTree(bot)
-
 # Tradutor
 translator = Translator()
 
@@ -35,7 +32,7 @@ async def change_status():
 async def on_ready():
     print(f"Bot conectado como {bot.user}")
     try:
-        synced = await tree.sync()
+        synced = await bot.tree.sync()
         print(f"Comandos de barra sincronizados: {len(synced)}")
     except Exception as e:
         print(f"Erro ao sincronizar comandos: {e}")
@@ -51,7 +48,7 @@ def translate_text(text: str, dest: str) -> str:
         return None
 
 # 🛠️ **Slash Command** `/traduzir`
-@tree.command(name="traduzir", description="Traduza uma mensagem pelo ID ou respondida")
+@bot.tree.command(name="traduzir", description="Traduza uma mensagem pelo ID ou respondida")
 @app_commands.describe(
     message_id="ID da mensagem (opcional). Se não informar, responda a uma mensagem."
 )
