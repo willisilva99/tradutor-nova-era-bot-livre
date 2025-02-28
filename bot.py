@@ -6,7 +6,7 @@ import asyncio
 import random
 from googletrans import Translator
 
-# Configurações do bot
+# Configuração do bot
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="$", intents=intents)
 
@@ -30,20 +30,34 @@ async def change_status():
 
 @bot.event
 async def on_ready():
-    print(f"Bot conectado como {bot.user}")
+    print(f"✅ Bot conectado como {bot.user}")
     
-    # Define o status do bot como "Jogando sesh.fyi | /help"
+    # Define o status fixo para aparecer no perfil
     activity = discord.Game(name="sesh.fyi | /help")
     await bot.change_presence(activity=activity)
 
-    # Sincroniza os slash commands
+    # 🔄 Sincroniza os comandos em todos os servidores
     try:
-        synced = await bot.tree.sync()
-        print(f"Comandos de barra sincronizados: {len(synced)}")
+        await bot.tree.sync()
+        print("✅ Slash Commands sincronizados com sucesso!")
     except Exception as e:
-        print(f"Erro ao sincronizar comandos: {e}")
+        print(f"❌ Erro ao sincronizar comandos: {e}")
+
+    # 🔄 Se os comandos não aparecerem no perfil, tenta sincronizar novamente
+    for guild in bot.guilds:
+        try:
+            await bot.tree.sync(guild=guild)
+            print(f"🔄 Sincronizado manualmente no servidor: {guild.name} ({guild.id})")
+        except Exception as e:
+            print(f"⚠️ Erro ao sincronizar no servidor {guild.name}: {e}")
 
     change_status.start()
+
+# 🔄 Comando para forçar sincronização manual dos comandos
+@bot.tree.command(name="sync", description="Força a sincronização dos comandos manualmente")
+async def sync_commands(interaction: discord.Interaction):
+    await bot.tree.sync()
+    await interaction.response.send_message("🔄 **Comandos sincronizados manualmente!**")
 
 # 🔄 Função de tradução usando googletrans
 def translate_text(text: str, dest: str) -> str:
@@ -60,7 +74,6 @@ def translate_text(text: str, dest: str) -> str:
     message_id="ID da mensagem (opcional). Se não informar, responda a uma mensagem."
 )
 async def slash_traduzir(interaction: discord.Interaction, message_id: str = None):
-    """Slash command que traduz um texto baseado em um ID de mensagem ou reply"""
     await interaction.response.defer(thinking=True)
     channel = interaction.channel
     target_message = None
@@ -108,7 +121,6 @@ async def slash_traduzir(interaction: discord.Interaction, message_id: str = Non
     except:
         pass
 
-    # 🔄 Mapeia a bandeira para o idioma
     target_language = {"🇧🇷": "pt", "🇺🇸": "en", "🇪🇸": "es"}.get(str(reaction.emoji), "pt")
 
     msg = await channel.send("🔄 **Traduzindo...**")
@@ -129,18 +141,16 @@ async def slash_traduzir(interaction: discord.Interaction, message_id: str = Non
     for emoji in feedback_emojis:
         await msg.add_reaction(emoji)
 
-# 🔥 **Slash Command `/ping` (Mostra Latência do Bot)**
+# 🔥 **Slash Command `/ping`**
 @bot.tree.command(name="ping", description="Mostra o tempo de resposta do bot")
 async def ping(interaction: discord.Interaction):
-    """Mostra o ping do bot"""
-    latency = round(bot.latency * 1000)  # Converte para ms
+    latency = round(bot.latency * 1000)
     await interaction.response.send_message(f"🏓 Pong! Latência: `{latency}ms`")
 
-# 🧹 **Slash Command `/clear` (Apaga até 3000 mensagens)**
+# 🧹 **Slash Command `/clear`**
 @bot.tree.command(name="clear", description="Limpa mensagens do chat (máx: 3000)")
 @app_commands.describe(amount="Quantidade de mensagens a deletar (1-3000)")
 async def clear(interaction: discord.Interaction, amount: int):
-    """Apaga mensagens do canal"""
     if amount < 1 or amount > 3000:
         await interaction.response.send_message("⚠️ **Escolha um número entre 1 e 3000.**", ephemeral=True)
         return
