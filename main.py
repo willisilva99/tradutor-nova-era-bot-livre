@@ -58,6 +58,7 @@ async def load_cogs():
     """
     await bot.load_extension("cogs.admin")
     await bot.load_extension("cogs.utility")
+    await bot.load_extension("cogs.sevendays")  # <-- Aqui carrega a cog 7DTD
 
 async def main():
     # Carrega as cogs
