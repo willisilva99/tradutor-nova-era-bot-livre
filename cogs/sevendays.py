@@ -60,40 +60,42 @@ class TelnetConnection:
 
     def handle_line(self, line: str):
         """
-        Processa as linhas recebidas.
-        Para linhas de chat no formato:
-          Chat (from 'Nome', entity id '...', to 'Global'): Mensagem
-        extrai o nome e a mensagem e envia no canal configurado no formato:
-          [chat] Nome: Mensagem
-        Evita duplicatas se a mesma linha for recebida consecutivamente.
+        Processa as linhas de saída do servidor.
+        Se for uma linha de chat com o formato:
+          Chat (from 'Steam_xxx', entity id '189', to 'Global'): 'Nome': Mensagem
+        extrai o nome e a mensagem usando regex e envia no canal
+        no formato: [chat] Nome: Mensagem.
         """
-        # Evita duplicação: se a linha for igual à última processada, ignora
+        # Evita duplicatas
         if self.last_line == line:
             return
         self.last_line = line
 
-        # Verifica se é mensagem de chat
         if "Chat (from " in line:
-            # Exemplo de formato: 
-            # Chat (from 'John', entity id '123', to 'Global'): Hello everyone!
-            pattern = r"Chat \(from '([^']+)'[^)]*\):\s*(.*)"
+            # Regex para extrair: nome (grupo 4) e mensagem (grupo 5)
+            pattern = r"Chat \(from '([^']+)', entity id '([^']+)', to '([^']+)'\):\s*'([^']+)':\s*(.*)"
             match = re.search(pattern, line)
             if match:
-                player = match.group(1)
-                message = match.group(2)
-                formatted = f"[chat] {player}: {message}"
+                player_name = match.group(4)
+                message = match.group(5)
+                formatted = f"[chat] {player_name}: {message}"
             else:
+                # Caso não bata o padrão, envia a linha original
                 formatted = line
             if self.channel_id:
                 channel = self.bot.get_channel(int(self.channel_id))
                 if channel:
-                    asyncio.run_coroutine_threadsafe(channel.send(formatted), self.bot.loop)
+                    asyncio.run_coroutine_threadsafe(
+                        channel.send(formatted), self.bot.loop
+                    )
         elif "GMSG" in line:
-            # Para mensagens GMSG, pode enviar conforme necessário (ou tratar de forma específica)
+            # Para mensagens GMSG, envie sem alteração
             if self.channel_id:
                 channel = self.bot.get_channel(int(self.channel_id))
                 if channel:
-                    asyncio.run_coroutine_threadsafe(channel.send(f"[7DTD] {line}"), self.bot.loop)
+                    asyncio.run_coroutine_threadsafe(
+                        channel.send(f"[7DTD] {line}"), self.bot.loop
+                    )
 
     def stop(self):
         """Para a thread e fecha a conexão."""
@@ -273,7 +275,9 @@ class SevenDaysCog(commands.Cog):
     async def players_online(self, interaction: discord.Interaction):
         """
         Executa "listplayers" para obter nomes de jogadores online e exibe num embed.
-        Remove duplicatas e exibe no formato: [chat] Nome: Mensagem.
+        Remove duplicatas e exibe o resultado no formato:
+          Total of X in the game
+          **Lista**: Nome1, Nome2, ...
         """
         await interaction.response.defer(thinking=True, ephemeral=True)
         guild_id = str(interaction.guild_id)
@@ -288,7 +292,6 @@ class SevenDaysCog(commands.Cog):
                 conn.start()
         conn = active_connections[guild_id]
         try:
-            # Usamos "listplayers" para obter os nomes
             response = await conn.send_command("listplayers")
         except Exception as e:
             await interaction.followup.send(f"Erro ao executar comando listplayers: {e}", ephemeral=True)
@@ -296,17 +299,17 @@ class SevenDaysCog(commands.Cog):
 
         lines = response.splitlines()
         total_msg = None
-        player_names = set()  # set para evitar duplicatas
+        player_names = set()  # Utilizamos set para evitar duplicatas
 
         for line in lines:
             line = line.strip()
             if line.startswith("Total of "):
                 total_msg = line
             elif "EntityID" in line:
-                # Cabeçalho, ignora
+                # Ignora cabeçalho
                 continue
             else:
-                # Supomos que o formato seja: "189 John ..." onde a segunda coluna é o nome
+                # Supondo que o formato seja: "189 John ...", onde a segunda coluna é o nome
                 parts = line.split()
                 if len(parts) >= 2:
                     name = parts[1].strip()
