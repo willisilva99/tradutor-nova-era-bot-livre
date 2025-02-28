@@ -60,80 +60,87 @@ class TelnetConnection:
 
     def handle_line(self, line: str):
         """
-        Processa as linhas de saída do servidor e formata mensagens de eventos:
+        Processa as linhas de saída do servidor 7DTD.
+        Apenas processa eventos de chat relevantes:
         
-        • Se a linha corresponder a uma mensagem de chat no formato:
-            Chat (from 'Steam_xxx', entity id '...', to 'Global'): 'Nome': Mensagem
-          formata como: 💬 **[CHAT] Nome**: Mensagem
-
-        • Se corresponder a uma morte:
-            GMSG: Player 'Nome' died
-          formata como: 💀 **[CHAT] Nome** morreu
-
-        • Se corresponder a saída:
-            GMSG: Player 'Nome' left the game
-          formata como: 🚪 **[CHAT] Nome** saiu do jogo
-
-        • Se corresponder a entrada (join ou login):
-            GMSG: Player 'Nome' joined the game
-            ou
-            RequestToEnterGame: .../Nome
-          formata como: 🟢 **[CHAT] Nome** entrou no jogo
-
-        Caso não bata nenhum padrão, envia a linha original.
+        - Mensagem de chat: 
+          Ex.: Chat (from 'Steam_xxx', entity id '189', to 'Global'): 'Nome': Mensagem
+          → Formata como: 💬 **[CHAT] Nome**: Mensagem
+        
+        - Morte:
+          Ex.: GMSG: Player 'Nome' died
+          → Formata como: 💀 **[CHAT] Nome** morreu
+        
+        - Saída:
+          Ex.: GMSG: Player 'Nome' left the game
+          → Formata como: 🚪 **[CHAT] Nome** saiu do jogo
+        
+        - Entrada:
+          Ex.: GMSG: Player 'Nome' joined the game
+               ou RequestToEnterGame: .../Nome
+          → Formata como: 🟢 **[CHAT] Nome** entrou no jogo
+        
+        Linhas que não baterem com nenhum padrão são ignoradas.
         """
-        # Evita duplicatas
+        # Evita duplicação
         if self.last_line == line:
             return
         self.last_line = line
 
         formatted = None
 
-        # Verifica morte
+        # Padrões de regex para cada evento
+        chat_pattern = r"Chat \(from '([^']+)', entity id '([^']+)', to '([^']+)'\):\s*'([^']+)':\s*(.*)"
         death_pattern = r"GMSG: Player '([^']+)' died"
-        m = re.search(death_pattern, line)
-        if m:
-            name = m.group(1)
-            formatted = f"💀 **[CHAT] {name}** morreu"
-        
-        # Verifica saída
-        if not formatted:
-            leave_pattern = r"GMSG: Player '([^']+)' left the game"
-            m = re.search(leave_pattern, line)
-            if m:
-                name = m.group(1)
-                formatted = f"🚪 **[CHAT] {name}** saiu do jogo"
-        
-        # Verifica entrada (join)
-        if not formatted:
-            join_pattern = r"GMSG: Player '([^']+)' joined the game"
-            m = re.search(join_pattern, line)
-            if m:
-                name = m.group(1)
-                formatted = f"🟢 **[CHAT] {name}** entrou no jogo"
-        
-        # Verifica login (RequestToEnterGame)
-        if not formatted:
-            login_pattern = r"RequestToEnterGame: [^/]+/([^'\s]+)"
+        left_pattern = r"GMSG: Player '([^']+)' left the game"
+        joined_pattern = r"GMSG: Player '([^']+)' joined the game"
+        login_pattern = r"RequestToEnterGame: [^/]+/([^'\s]+)"
+
+        if "Chat (from " in line:
+            match = re.search(chat_pattern, line)
+            if match:
+                name = match.group(4)
+                message = match.group(5)
+                # Formatação com emoji e negrito
+                formatted = f"💬 **[CHAT] {name}**: {message}"
+            else:
+                return
+        elif "GMSG: Player" in line:
+            if "died" in line:
+                m = re.search(death_pattern, line)
+                if m:
+                    name = m.group(1)
+                    formatted = f"💀 **[CHAT] {name}** morreu"
+                else:
+                    return
+            elif "left the game" in line:
+                m = re.search(left_pattern, line)
+                if m:
+                    name = m.group(1)
+                    formatted = f"🚪 **[CHAT] {name}** saiu do jogo"
+                else:
+                    return
+            elif "joined the game" in line:
+                m = re.search(joined_pattern, line)
+                if m:
+                    name = m.group(1)
+                    formatted = f"🟢 **[CHAT] {name}** entrou no jogo"
+                else:
+                    return
+            else:
+                return
+        elif "RequestToEnterGame:" in line:
             m = re.search(login_pattern, line)
             if m:
                 name = m.group(1)
                 formatted = f"🟢 **[CHAT] {name}** entrou no jogo"
-        
-        # Verifica mensagem de chat padrão
-        if not formatted and "Chat (from " in line:
-            chat_pattern = r"Chat \(from '[^']+', entity id '[^']+', to '[^']+'\):\s*'([^']+)':\s*(.*)"
-            m = re.search(chat_pattern, line)
-            if m:
-                name = m.group(1)
-                message = m.group(2)
-                formatted = f"💬 **[CHAT] {name}**: {message}"
-        
-        # Se nenhum padrão bater, usa a linha original
-        if not formatted:
-            formatted = line
+            else:
+                return
+        else:
+            # Ignora linhas que não correspondem aos padrões
+            return
 
-        if self.channel_id:
+        if self.channel_id and formatted:
             channel = self.bot.get_channel(int(self.channel_id))
             if channel:
                 asyncio.run_coroutine_threadsafe(
@@ -342,7 +349,7 @@ class SevenDaysCog(commands.Cog):
 
         lines = response.splitlines()
         total_msg = None
-        player_names = set()  # Usamos set para evitar duplicatas
+        player_names = set()  # Utilizamos set para evitar duplicatas
 
         for line in lines:
             line = line.strip()
