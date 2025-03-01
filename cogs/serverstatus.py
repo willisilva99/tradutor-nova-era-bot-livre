@@ -34,11 +34,10 @@ class ServerStatusCog(commands.Cog):
     async def fetch_status_embed(self, server_key: str) -> discord.Embed:
         """
         Consulta as APIs do 7DTD e constrói um embed com:
-          - Versão, Nome, Hostname, Localização
-          - IP e Porta
-          - Jogadores Online (atual/max), Favoritos e Uptime
-          - Total de votos e Top 3 votantes
-        Se a API não retornar informações adequadas, exibe um embed de erro.
+          - Detalhes do servidor (versão, nome, hostname, localização, IP, porta, jogadores online, favoritos e uptime)
+          - Total de votos (quantos elementos há no array de votos)
+          - Top 3 votantes (agrupados por nickname)
+        Se ocorrer algum erro, retorna um embed de erro.
         """
         headers = {"Accept": "application/json"}
         detail_url = f"https://7daystodie-servers.com/api/?object=servers&element=detail&key={server_key}&format=json"
@@ -84,7 +83,7 @@ class ServerStatusCog(commands.Cog):
                 color=discord.Color.red()
             )
 
-        # Extração dos dados conforme a estrutura fornecida
+        # Extração dos dados conforme a estrutura da resposta da API
         server_version = detail_data.get("version", "N/A")
         server_name = detail_data.get("name", "N/A")
         hostname = detail_data.get("hostname", "N/A")
@@ -98,16 +97,17 @@ class ServerStatusCog(commands.Cog):
         online_status = detail_data.get("is_online", "0") == "1"
         status_text = "Online" if online_status else "Offline"
 
-        # Para votos: assume que o endpoint de votes retorna um array em "votes"
+        # Para votos: consideramos que votes_data tem um array em "votes"
         votes_array = votes_data.get("votes", [])
         total_votes = len(votes_array)
         
-        # Processa os top 3 votantes ordenando por "timestamp" (descendente)
-        top3 = sorted(votes_array, key=lambda v: int(v.get("timestamp", 0)), reverse=True)[:3]
-        top3_str = (
-            ", ".join(f'{v.get("nickname", "N/A")} (Claimed: {v.get("claimed", "0")})' for v in top3)
-            if top3 else "N/A"
-        )
+        # Agrupa votos por nickname
+        vote_counts = {}
+        for vote in votes_array:
+            nickname = vote.get("nickname", "N/A")
+            vote_counts[nickname] = vote_counts.get(nickname, 0) + 1
+        top3 = sorted(vote_counts.items(), key=lambda item: item[1], reverse=True)[:3]
+        top3_str = ", ".join(f"{nickname} ({count})" for nickname, count in top3) if top3 else "N/A"
 
         embed = discord.Embed(
             title=f"Status do Servidor: {server_name}",
