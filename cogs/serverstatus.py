@@ -6,12 +6,11 @@ import asyncio
 import aiohttp
 import time
 
-from db import SessionLocal, ServerConfig, ServerStatusConfig  # Certifique-se de que ServerStatusConfig está definido no seu db.py
+from db import SessionLocal, ServerStatusConfig  # Certifique-se de que ServerStatusConfig está definido no db.py
 
 class ServerStatusCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Inicia a task de atualização automática
         self.status_task.start()
 
     def cog_unload(self):
@@ -19,7 +18,7 @@ class ServerStatusCog(commands.Cog):
 
     @tasks.loop(minutes=10)
     async def status_task(self):
-        """Atualiza o status de todos os servidores configurados a cada 10 minutos."""
+        """Atualiza o status de todos os servidores a cada 10 minutos."""
         with SessionLocal() as session:
             configs = session.query(ServerStatusConfig).all()
         for config in configs:
@@ -34,14 +33,16 @@ class ServerStatusCog(commands.Cog):
 
     async def fetch_status_embed(self, server_key: str) -> discord.Embed:
         """
-        Consulta as APIs do 7DTD e constrói um embed com os dados:
-          - Detalhes do servidor (nome, ip, porta, jogadores online)
+        Consulta as APIs do 7DTD e constrói um embed com:
+          - Nome, IP, Porta, status online/offline
           - Total de votos
           - Top 3 votantes
+        Ajuste os campos conforme a resposta da API.
         """
         detail_url = f"https://7daystodie-servers.com/api/?object=servers&element=detail&key={server_key}&format=json"
         votes_url = f"https://7daystodie-servers.com/api/?object=servers&element=votes&key={server_key}&format=json"
         voters_url = f"https://7daystodie-servers.com/api/?object=servers&element=voters&key={server_key}&month=all&format=json"
+        
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(detail_url) as r:
@@ -62,7 +63,7 @@ class ServerStatusCog(commands.Cog):
                 voters_data = {}
                 print(f"Erro na consulta voters: {e}")
 
-        # Extrai dados do detail_data – ajuste conforme a estrutura da resposta da API
+        # Extraia dados do detail_data conforme a estrutura retornada pela API
         server_name = detail_data.get("serverName", "N/A")
         ip = detail_data.get("ip", "N/A")
         port = detail_data.get("port", "N/A")
@@ -73,9 +74,8 @@ class ServerStatusCog(commands.Cog):
 
         total_votes = votes_data.get("totalVotes", "N/A")
 
-        # Para os votantes, assumimos que voters_data é um dicionário com chave "voters" contendo uma lista de dicts
+        # Processa os votantes
         voters_list = voters_data.get("voters", [])
-        # Ordena os votantes por votos (descendente) – ajuste a chave conforme a resposta real
         voters_sorted = sorted(voters_list, key=lambda v: v.get("votes", 0), reverse=True)
         top3 = voters_sorted[:3]
         top3_str = ", ".join(f'{v.get("username", "N/A")} ({v.get("votes", 0)})' for v in top3) if top3 else "N/A"
@@ -92,16 +92,14 @@ class ServerStatusCog(commands.Cog):
         embed.set_footer(text="Atualizado em " + time.strftime("%d/%m/%Y %H:%M:%S"))
         return embed
 
-    @app_commands.command(name="serverstatus_config", description="Configura a exibição automática do status do servidor 7DTD.")
+    @app_commands.command(name="serverstatus_config", description="Configura o status do servidor 7DTD para atualização automática.")
     async def serverstatus_config(self, interaction: discord.Interaction, server_key: str, canal: discord.TextChannel):
         """
-        Configura o status do servidor para atualização automática.
-        O comando posta uma mensagem inicial no canal e salva a configuração no banco.
+        Configura o status do servidor, salvando a ServerKey e o canal onde o status será postado.
+        O bot envia uma mensagem inicial que será editada automaticamente a cada 10 minutos.
         """
         await interaction.response.defer(thinking=True, ephemeral=True)
-        # Envia mensagem inicial
         msg = await canal.send("Carregando status do servidor...")
-        # Salva a configuração na tabela ServerStatusConfig
         with SessionLocal() as session:
             config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild_id)).first()
             if not config:
@@ -111,20 +109,19 @@ class ServerStatusCog(commands.Cog):
             config.channel_id = str(canal.id)
             config.message_id = str(msg.id)
             session.commit()
-        await interaction.followup.send("Configuração de status do servidor atualizada!", ephemeral=True)
+        await interaction.followup.send("Configuração de status atualizada!", ephemeral=True)
 
-    @app_commands.command(name="serverstatus_show", description="Mostra o status do servidor 7DTD imediatamente.")
+    @app_commands.command(name="serverstatus_show", description="Exibe o status do servidor 7DTD imediatamente.")
     async def serverstatus_show(self, interaction: discord.Interaction):
         """
-        Atualiza e exibe o status do servidor 7DTD com base na configuração armazenada.
+        Atualiza e exibe imediatamente o status do servidor conforme a configuração salva.
         """
         await interaction.response.defer(thinking=True, ephemeral=False)
         with SessionLocal() as session:
             config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild_id)).first()
         if not config:
-            await interaction.followup.send("Nenhuma configuração de status encontrada. Use /serverstatus_config para configurar.", ephemeral=False)
+            await interaction.followup.send("Nenhuma configuração encontrada. Use /serverstatus_config para configurar.", ephemeral=False)
             return
-
         embed = await self.fetch_status_embed(config.server_key)
         await interaction.followup.send(embed=embed, ephemeral=False)
 
