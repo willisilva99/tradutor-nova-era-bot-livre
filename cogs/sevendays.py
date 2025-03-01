@@ -63,21 +63,21 @@ class TelnetConnection:
         Processa as linhas de saída do servidor 7DTD.
         Filtra e formata eventos de chat:
         
-        - Mensagem de chat (formato):
-          Chat (from 'Steam_xxx', entity id '...', to 'Global'): 'Nome': Mensagem
-          → Formata como: 💬 **[CHAT] Nome**: Mensagem
-          
-        - Morte:
-          GMSG: Player 'Nome' died
+        • Mensagem de chat:
+          Ex.: Chat (from 'Steam_xxx', entity id '189', to 'Global'): 'Nome': Mensagem
+          → Formata como: 💬 **[CHAT] Nome**: Mensagem (com o prefixo [DC] colorido)
+        
+        • Morte:
+          Ex.: GMSG: Player 'Nome' died
           → Formata como: 💀 **[CHAT] Nome** morreu
-          
-        - Saída:
-          GMSG: Player 'Nome' left the game
+        
+        • Saída:
+          Ex.: GMSG: Player 'Nome' left the game
           → Formata como: 🚪 **[CHAT] Nome** saiu do jogo
-          
-        - Entrada:
-          GMSG: Player 'Nome' joined the game
-          ou RequestToEnterGame: .../Nome
+        
+        • Entrada:
+          Ex.: GMSG: Player 'Nome' joined the game
+               ou RequestToEnterGame: .../Nome
           → Formata como: 🟢 **[CHAT] Nome** entrou no jogo
         
         Linhas que não corresponderem são ignoradas.
@@ -101,6 +101,7 @@ class TelnetConnection:
             if match:
                 name = match.group(4)
                 message = match.group(5)
+                # Formata com emoji de chat, nome em amarelo ([FFFF00]) e mensagem em ciano ([00FFFF])
                 formatted = f"💬 **[CHAT] {name}**: [00FFFF]{message}[-]"
             else:
                 return
@@ -138,9 +139,9 @@ class TelnetConnection:
         else:
             return
 
-        # Adiciona o prefixo de Discord com cor (exemplo: cor padrão Discord: 7289DA)
+        # Adiciona o prefixo de Discord formatado: [DC] com cor 7289DA
         if formatted:
-            formatted = f'[7289DA][DC][-] {formatted}'
+            formatted = f'[7289DA]DC[-] {formatted}'
 
         if self.channel_id and formatted:
             channel = self.bot.get_channel(int(self.channel_id))
@@ -188,6 +189,7 @@ class SevenDaysCog(commands.Cog):
     - /7dtd_test
     - /7dtd_bloodmoon
     - /7dtd_players
+    E também escuta mensagens no canal configurado para enviar para o jogo.
     """
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -253,7 +255,6 @@ class SevenDaysCog(commands.Cog):
                 conn = TelnetConnection(guild_id, cfg.ip, cfg.port, cfg.password, cfg.channel_id, self.bot)
                 active_connections[guild_id] = conn
                 conn.start()
-
         conn = active_connections[guild_id]
         try:
             result = await conn.send_command("version")
@@ -351,7 +352,7 @@ class SevenDaysCog(commands.Cog):
 
         lines = response.splitlines()
         total_msg = None
-        player_names = set()  # Utilizamos set para evitar duplicatas
+        player_names = set()  # Usamos set para evitar duplicatas
 
         for line in lines:
             line = line.strip()
@@ -360,7 +361,7 @@ class SevenDaysCog(commands.Cog):
             elif "EntityID" in line:
                 continue  # Ignora cabeçalho
             else:
-                # Supomos que o formato seja: "189 John ..." onde a segunda coluna é o nome
+                # Supondo que o formato seja: "189 John ..." onde a segunda coluna é o nome
                 parts = line.split()
                 if len(parts) >= 2:
                     name = parts[1].strip()
@@ -380,6 +381,31 @@ class SevenDaysCog(commands.Cog):
             color=discord.Color.blue()
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        """
+        Se a mensagem for enviada no canal configurado (via /7dtd_channel) neste servidor,
+        envia a mensagem para o jogo utilizando o comando 'say' com formatação de cores:
+          [7289DA]DC[-] [FFFF00]Nome do Autor[-]: [00FFFF]Mensagem[-]
+        """
+        if message.author.bot or not message.guild:
+            return
+
+        guild_id = str(message.guild.id)
+        if guild_id in active_connections:
+            conn = active_connections[guild_id]
+            # Verifica se a mensagem foi enviada no canal configurado
+            if conn.channel_id and message.channel.id == int(conn.channel_id):
+                # Evita enviar comandos (opcional, se a mensagem começar com o prefixo do bot)
+                if message.content.startswith("!"):
+                    return
+                # Formata a mensagem para o jogo
+                formatted_msg = f'say "[7289DA]DC[-] [FFFF00]{message.author.display_name}[-]: [00FFFF]{message.content}[-]"'
+                try:
+                    await conn.send_command(formatted_msg, wait_prompt=False)
+                except Exception as e:
+                    print(f"Erro ao enviar mensagem para o jogo: {e}")
 
 async def setup(bot: commands.Bot):
     """
