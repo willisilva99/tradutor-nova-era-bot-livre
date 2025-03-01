@@ -6,7 +6,7 @@ import asyncio
 import aiohttp
 import time
 
-from db import SessionLocal, ServerStatusConfig  # Certifique-se de que ServerStatusConfig está definido no seu db.py
+from db import SessionLocal, ServerStatusConfig  # Certifique-se de que ServerStatusConfig está definido no db.py
 
 class ServerStatusCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -35,7 +35,8 @@ class ServerStatusCog(commands.Cog):
         """
         Consulta as APIs do 7DTD e constrói um embed com:
           - Detalhes do servidor (versão, nome, hostname, localização, IP, porta, jogadores online, favoritos, uptime)
-          - Total de votos e Top 3 votantes (agrupados por nickname)
+          - Total de votos (calculado pelo tamanho do array de votos)
+          - Top 3 votantes (agrupados por nickname)
         Caso a API não retorne informações adequadas, exibe um embed de erro.
         """
         headers = {"Accept": "application/json"}
@@ -56,7 +57,11 @@ class ServerStatusCog(commands.Cog):
                 )
             try:
                 async with session.get(votes_url, headers=headers) as r:
-                    votes_data = await r.json(content_type=None)
+                    votes_response = await r.json(content_type=None)
+                    if isinstance(votes_response, list):
+                        votes_array = votes_response
+                    else:
+                        votes_array = votes_response.get("votes", [])
             except Exception as e:
                 print(f"Erro na consulta votes: {e}")
                 return discord.Embed(
@@ -66,7 +71,11 @@ class ServerStatusCog(commands.Cog):
                 )
             try:
                 async with session.get(voters_url, headers=headers) as r:
-                    voters_data = await r.json(content_type=None)
+                    voters_response = await r.json(content_type=None)
+                    if isinstance(voters_response, list):
+                        voters_list = voters_response
+                    else:
+                        voters_list = voters_response.get("voters", [])
             except Exception as e:
                 print(f"Erro na consulta voters: {e}")
                 return discord.Embed(
@@ -82,7 +91,7 @@ class ServerStatusCog(commands.Cog):
                 color=discord.Color.red()
             )
 
-        # Extração dos dados usando os campos conforme os exemplos fornecidos
+        # Extração dos dados conforme os campos retornados pela API
         server_version = detail_data.get("version", "N/A")
         server_name = detail_data.get("name", "N/A")
         hostname = detail_data.get("hostname", "N/A")
@@ -93,20 +102,22 @@ class ServerStatusCog(commands.Cog):
         uptime = detail_data.get("uptime", "N/A")
         ip = detail_data.get("address", "N/A")
         port = detail_data.get("port", "N/A")
-        # Se a API não retornar status, assumimos online (você pode ajustar conforme necessário)
-        online_status = True  
+        online_status = detail_data.get("is_online", "0") == "1"
         status_text = "Online" if online_status else "Offline"
 
-        # Processamento dos votos: assume que votes_data retorna um array em "votes"
-        votes_array = votes_data.get("votes", [])
+        # Total de votos: calcula o tamanho do array de votos
         total_votes = len(votes_array)
         
         # Agrupa os votos por nickname
         vote_counts = {}
         for vote in votes_array:
             nickname = vote.get("nickname", "N/A")
-            vote_counts[nickname] = vote_counts.get(nickname, 0) + 1
+            try:
+                vote_counts[nickname] = vote_counts.get(nickname, 0) + 1
+            except Exception:
+                vote_counts[nickname] = 1
         
+        # Ordena os votantes por quantidade de votos e pega os top 3
         top3 = sorted(vote_counts.items(), key=lambda item: item[1], reverse=True)[:3]
         top3_str = ", ".join(f"{nickname} ({count})" for nickname, count in top3) if top3 else "N/A"
 
