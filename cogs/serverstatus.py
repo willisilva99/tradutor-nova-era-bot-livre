@@ -6,7 +6,7 @@ import asyncio
 import aiohttp
 import time
 
-from db import SessionLocal, ServerStatusConfig  # Certifique-se de que ServerStatusConfig está definido no seu db.py
+from db import SessionLocal, ServerStatusConfig  # Certifique-se de que ServerStatusConfig está definido no db.py
 
 class ServerStatusCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -34,10 +34,11 @@ class ServerStatusCog(commands.Cog):
     async def fetch_status_embed(self, server_key: str) -> discord.Embed:
         """
         Consulta as APIs do 7DTD e constrói um embed com:
-          - Detalhes do servidor (nome, IP, porta, status e jogadores online)
-          - Total de votos
-          - Top 3 votantes
-        Caso a API não retorne informações adequadas, exibe um embed de erro.
+          - Versão, Nome, Hostname, Localização
+          - IP e Porta
+          - Jogadores Online (atual/max), Favoritos e Uptime
+          - Total de votos e Top 3 votantes
+        Se a API não retornar informações adequadas, exibe um embed de erro.
         """
         headers = {"Accept": "application/json"}
         detail_url = f"https://7daystodie-servers.com/api/?object=servers&element=detail&key={server_key}&format=json"
@@ -83,22 +84,25 @@ class ServerStatusCog(commands.Cog):
                 color=discord.Color.red()
             )
 
-        # Extração dos dados conforme a estrutura fornecida pela API
+        # Extração dos dados conforme a estrutura fornecida
+        server_version = detail_data.get("version", "N/A")
         server_name = detail_data.get("name", "N/A")
+        hostname = detail_data.get("hostname", "N/A")
+        location = detail_data.get("location", "N/A")
+        maxplayers = detail_data.get("maxplayers", "N/A")
+        players = detail_data.get("players", "N/A")
+        favorited = detail_data.get("favorited", "N/A")
+        uptime = detail_data.get("uptime", "N/A")
         ip = detail_data.get("address", "N/A")
         port = detail_data.get("port", "N/A")
-        # Jogadores online não consta na resposta; usamos "N/A"
-        players = "N/A"
-        max_players = "N/A"
-        # Se não houver informação de status, assumimos online
-        online_status = True
+        online_status = detail_data.get("is_online", "0") == "1"
         status_text = "Online" if online_status else "Offline"
 
-        # Para votos: usamos o array de votos; Total de votos será o tamanho desse array
+        # Para votos: assume que o endpoint de votes retorna um array em "votes"
         votes_array = votes_data.get("votes", [])
         total_votes = len(votes_array)
-
-        # Para os top 3 votantes, ordenamos pelo timestamp (descendente)
+        
+        # Processa os top 3 votantes ordenando por "timestamp" (descendente)
         top3 = sorted(votes_array, key=lambda v: int(v.get("timestamp", 0)), reverse=True)[:3]
         top3_str = (
             ", ".join(f'{v.get("nickname", "N/A")} (Claimed: {v.get("claimed", "0")})' for v in top3)
@@ -109,9 +113,13 @@ class ServerStatusCog(commands.Cog):
             title=f"Status do Servidor: {server_name}",
             color=discord.Color.dark_green() if online_status else discord.Color.red()
         )
-        embed.add_field(name="Status", value=status_text, inline=True)
+        embed.add_field(name="Versão", value=server_version, inline=True)
+        embed.add_field(name="Hostname", value=hostname, inline=True)
+        embed.add_field(name="Localização", value=location, inline=True)
         embed.add_field(name="IP:Porta", value=f"{ip}:{port}", inline=True)
-        embed.add_field(name="Jogadores Online", value=f"{players}/{max_players}", inline=True)
+        embed.add_field(name="Jogadores Online", value=f"{players}/{maxplayers}", inline=True)
+        embed.add_field(name="Favoritos", value=favorited, inline=True)
+        embed.add_field(name="Uptime", value=uptime, inline=True)
         embed.add_field(name="Total de Votos", value=total_votes, inline=True)
         embed.add_field(name="Top 3 Votantes", value=top3_str, inline=False)
         embed.set_footer(text="Atualizado em " + time.strftime("%d/%m/%Y %H:%M:%S"))
