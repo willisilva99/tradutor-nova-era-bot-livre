@@ -29,12 +29,12 @@ class ServerStatusCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.ultimo_status_online = {}
-        self.status_task.start()  # Inicia a tarefa de atualização
+        self.status_task.start()
 
     def cog_unload(self):
         self.status_task.cancel()
 
-    @tasks.loop(minutes=5)  # Atualiza a cada 5 minutos
+    @tasks.loop(minutes=5)
     async def status_task(self):
         """Atualiza o status dos servidores a cada 5 minutos."""
         with SessionLocal() as session:
@@ -44,11 +44,10 @@ class ServerStatusCog(commands.Cog):
             channel = self.bot.get_channel(int(config.channel_id))
             if channel:
                 try:
-                    # Tenta buscar a mensagem existente para editar
                     msg = await channel.fetch_message(int(config.message_id))
                     await msg.edit(embed=embed, view=view)
                     
-                    # Verifica mudança de status comparando o valor numérico da cor
+                    # Verifica mudança de status com base no valor numérico da cor
                     online = (embed.color.value == discord.Color.green().value)
                     if config.guild_id in self.ultimo_status_online:
                         if self.ultimo_status_online[config.guild_id] and not online:
@@ -64,25 +63,26 @@ class ServerStatusCog(commands.Cog):
         Consulta a API do 7DTD para obter os detalhes do servidor e constrói o embed e os botões.
         Utiliza cache para reduzir requisições repetidas.
         """
-        # Verifica se há cache válido para esta chave
+        # Verifica cache
         if (cached := status_cache.get(server_key)):
             return cached
         
         headers = {"Accept": "application/json"}
         detail_url = f"https://7daystodie-servers.com/api/?object=servers&element=detail&key={server_key}&format=json"
         
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(detail_url, headers=headers) as r:
+        # Usando timeout para evitar travamento
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with asyncio.wait_for(session.get(detail_url, headers=headers), timeout=10) as r:
                     detail_data = await r.json(content_type=None)
-            except Exception as e:
-                print(f"Erro na consulta da API (detail): {e}")
-                erro_embed = discord.Embed(
-                    title="Erro ao obter dados do servidor", 
-                    description=f"{e}", 
-                    color=discord.Color.red()
-                )
-                return erro_embed, discord.ui.View()
+        except Exception as e:
+            print(f"Erro na consulta da API (detail): {e}")
+            erro_embed = discord.Embed(
+                title="Erro ao obter dados do servidor", 
+                description=f"{e}", 
+                color=discord.Color.red()
+            )
+            return erro_embed, discord.ui.View()
         
         if not detail_data:
             erro_embed = discord.Embed(
@@ -92,7 +92,7 @@ class ServerStatusCog(commands.Cog):
             )
             return erro_embed, discord.ui.View()
         
-        # Extração dos dados retornados
+        # Extração dos dados
         server_version = detail_data.get("version", "N/A")
         server_name = detail_data.get("name", "N/A")
         hostname = detail_data.get("hostname", "N/A")
@@ -105,7 +105,7 @@ class ServerStatusCog(commands.Cog):
         port = detail_data.get("port", "N/A")
         online_status = detail_data.get("is_online", "0") == "1"
         
-        # Define emoji e cor com base no status online
+        # Define emoji e cor com base no status
         status_emoji = "🟢" if online_status else "🔴"
         color = discord.Color.green() if online_status else discord.Color.red()
         timestamp = time.strftime('%d/%m/%Y %H:%M:%S')
@@ -123,7 +123,7 @@ class ServerStatusCog(commands.Cog):
         embed.add_field(name="📌 IP", value=f"{ip}:{port}", inline=True)
         embed.set_footer(text=f"Atualizado em: {timestamp}")
         
-        # Criação dos botões para votar e jogar
+        # Criação dos botões
         view = discord.ui.View()
         view.add_item(discord.ui.Button(
             label="🌐 Votar no Servidor", 
@@ -136,7 +136,6 @@ class ServerStatusCog(commands.Cog):
             style=discord.ButtonStyle.link
         ))
         
-        # Salva o embed e view no cache
         status_cache.set(server_key, (embed, view))
         return embed, view
 
@@ -147,50 +146,59 @@ class ServerStatusCog(commands.Cog):
           - Consulta a API e envia o embed inicial no canal especificado.
           - Salva a ServerKey, o canal e o ID da mensagem enviada.
         """
-        await interaction.response.defer(thinking=True, ephemeral=True)
-        embed, view = await self.fetch_status_embed(server_key)
-        msg = await canal.send(embed=embed, view=view)  # Envia o embed inicial e captura o ID da mensagem
-        with SessionLocal() as session:
-            config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild_id)).first()
-            if not config:
-                config = ServerStatusConfig(guild_id=str(interaction.guild_id))
-                session.add(config)
-            config.server_key = server_key
-            config.channel_id = str(canal.id)
-            config.message_id = str(msg.id)
-            session.commit()
-        await interaction.followup.send("✅ Configuração salva! O status será atualizado automaticamente.", ephemeral=True)
+        try:
+            await interaction.response.defer(thinking=True, ephemeral=True)
+            # Tenta obter o embed com timeout para evitar travamento
+            embed, view = await asyncio.wait_for(self.fetch_status_embed(server_key), timeout=10)
+            msg = await canal.send(embed=embed, view=view)
+            # Atualiza o banco com os dados de configuração
+            with SessionLocal() as session:
+                config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild.id)).first()
+                if not config:
+                    config = ServerStatusConfig(guild_id=str(interaction.guild.id))
+                    session.add(config)
+                config.server_key = server_key
+                config.channel_id = str(canal.id)
+                config.message_id = str(msg.id)
+                session.commit()
+            await interaction.followup.send("✅ Configuração salva! O status será atualizado automaticamente.", ephemeral=True)
+        except Exception as e:
+            print("Erro no comando serverstatus_config:", e)
+            await interaction.followup.send(f"❌ Ocorreu um erro: {e}", ephemeral=True)
 
     @app_commands.command(name="serverstatus_show", description="Exibe o status do servidor 7DTD imediatamente.")
     async def serverstatus_show(self, interaction: discord.Interaction):
         """
         Comando para exibir o status do servidor imediatamente.
-        Caso o ID da mensagem não exista (por exemplo, se a mensagem foi apagada), envia uma nova mensagem
-        e atualiza o registro no banco de dados.
+        Caso o ID da mensagem não exista, envia uma nova mensagem e atualiza o registro.
         """
-        await interaction.response.defer(thinking=True, ephemeral=False)
-        with SessionLocal() as session:
-            config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild_id)).first()
-        if not config:
-            await interaction.followup.send("Nenhuma configuração encontrada. Use /serverstatus_config para configurar.")
-            return
-
-        embed, view = await self.fetch_status_embed(config.server_key)
-        channel = interaction.channel
-
-        # Tenta buscar a mensagem de status já registrada
         try:
-            msg = await channel.fetch_message(int(config.message_id))
-        except Exception as e:
-            print(f"Não foi possível buscar a mensagem registrada: {e}")
-            msg = await channel.send(embed=embed, view=view)
-            # Atualiza o ID da mensagem no banco de dados
+            await interaction.response.defer(thinking=True, ephemeral=False)
             with SessionLocal() as session:
-                config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild_id)).first()
-                config.message_id = str(msg.id)
-                session.commit()
+                config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild.id)).first()
+            if not config:
+                await interaction.followup.send("Nenhuma configuração encontrada. Use /serverstatus_config para configurar.")
+                return
 
-        await interaction.followup.send(embed=embed, view=view)
+            embed, view = await self.fetch_status_embed(config.server_key)
+            channel = interaction.channel
+
+            # Tenta buscar a mensagem de status já registrada
+            try:
+                msg = await channel.fetch_message(int(config.message_id))
+            except Exception as e:
+                print(f"Não foi possível buscar a mensagem registrada: {e}")
+                msg = await channel.send(embed=embed, view=view)
+                # Atualiza o ID da mensagem no banco
+                with SessionLocal() as session:
+                    config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild.id)).first()
+                    config.message_id = str(msg.id)
+                    session.commit()
+
+            await interaction.followup.send(embed=embed, view=view)
+        except Exception as e:
+            print("Erro no comando serverstatus_show:", e)
+            await interaction.followup.send(f"❌ Ocorreu um erro: {e}", ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ServerStatusCog(bot))
