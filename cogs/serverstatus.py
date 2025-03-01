@@ -104,10 +104,6 @@ class ServerStatusCog(commands.Cog):
         
         status_cache.set(server_key, (embed, view))
         return embed, view
-@bot.event
-async def on_ready():
-    await bot.tree.sync()
-    print("✅ Comandos de Slash sincronizados!")
 
     @app_commands.command(name="serverstatus_show", description="Exibe o status do servidor agora mesmo.")
     async def serverstatus_show(self, interaction: discord.Interaction):
@@ -124,9 +120,15 @@ async def on_ready():
                 config.message_id = str(msg.id)
                 session.commit()
         else:
-            channel = self.bot.get_channel(int(config.channel_id))
+            channel = interaction.client.get_channel(int(config.channel_id))  # Correção aqui
             msg = await channel.fetch_message(int(config.message_id))
             await msg.edit(embed=embed, view=view)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ServerStatusCog(bot))
+
+# Sincronizar comandos corretamente no on_ready
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print("✅ Comandos de Slash sincronizados!")
