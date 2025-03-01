@@ -114,7 +114,15 @@ class ServerStatusCog(commands.Cog):
             await interaction.followup.send("⚠️ Nenhuma configuração encontrada. Use /serverstatus_config.", ephemeral=False)
             return
         embed, view = await self.fetch_status_embed(config.server_key)
-        await interaction.followup.send(embed=embed, view=view, ephemeral=False)
+        if not config.message_id:
+            msg = await interaction.followup.send(embed=embed, view=view, ephemeral=False)
+            with SessionLocal() as session:
+                config.message_id = str(msg.id)
+                session.commit()
+        else:
+            channel = self.bot.get_channel(int(config.channel_id))
+            msg = await channel.fetch_message(int(config.message_id))
+            await msg.edit(embed=embed, view=view)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ServerStatusCog(bot))
