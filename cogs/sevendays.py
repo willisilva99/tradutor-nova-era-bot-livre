@@ -67,16 +67,11 @@ class TelnetConnection:
         Processa as linhas de saída do servidor 7DTD e formata os eventos de chat.
         
         Eventos tratados:
-          - Mensagem de chat:
-            Ex.: Chat (from 'Steam_xxx', entity id '189', to 'Global'): 'Nome': Mensagem
+          - Chat: Ex.: Chat (from 'Steam_xxx', entity id '189', to 'Global'): 'Nome': Mensagem
             → Exibe no Discord como: 💬 **[CHAT] Nome**: Mensagem
-          - Morte:
-            → 💀 **[CHAT] Nome** morreu
-          - Saída:
-            → 🚪 **[CHAT] Nome** saiu do jogo
-          - Entrada:
-            → 🟢 **[CHAT] Nome** entrou no jogo
-        Linhas que não corresponderem são ignoradas.
+          - Morte: GMSG: Player 'Nome' died → 💀 **[CHAT] Nome** morreu
+          - Saída: GMSG: Player 'Nome' left the game → 🚪 **[CHAT] Nome** saiu do jogo
+          - Entrada: GMSG: Player 'Nome' joined the game ou RequestToEnterGame: .../Nome → 🟢 **[CHAT] Nome** entrou no jogo
         """
         if self.last_line == line:
             return
@@ -131,7 +126,6 @@ class TelnetConnection:
         else:
             return
 
-        # Envia para o Discord (mensagens vindas do jogo)
         if self.channel_id and formatted:
             channel = self.bot.get_channel(int(self.channel_id))
             if channel:
@@ -200,7 +194,7 @@ class SevenDaysCog(commands.Cog):
             active_connections[guild_id].stop()
             del active_connections[guild_id]
 
-        channel_id = cfg.channel_id  # Pode estar vazio se não definido
+        channel_id = cfg.channel_id
         conn = TelnetConnection(guild_id, ip, port, password, channel_id, self.bot)
         active_connections[guild_id] = conn
         conn.start()
@@ -250,7 +244,7 @@ class SevenDaysCog(commands.Cog):
     async def bloodmoon_status(self, interaction: discord.Interaction):
         """
         Chama 'gettime' e faz parse de "Day X, HH:MM" para calcular a próxima lua de sangue.
-        Exibe um embed temático com informações e alerta de apocalipse zumbi.
+        Exibe um embed temático com mensagens diferenciadas conforme o tempo restante.
         """
         await interaction.response.defer(thinking=True, ephemeral=False)
         guild_id = str(interaction.guild_id)
@@ -290,25 +284,29 @@ class SevenDaysCog(commands.Cog):
             await interaction.followup.send(f"Não foi possível parsear o horário:\n```\n{response}\n```", ephemeral=False)
             return
 
-        horde_freq = 7
-        daysFromHorde = day % horde_freq
-        if daysFromHorde == 0:
-            if hour >= 22 or hour < 4:
-                previsao = "💀 **ALERTA:** A horda está acontecendo AGORA!"
-            elif hour < 22:
-                hrs_left = 22 - hour
-                previsao = f"⚠️ **Atenção:** A horda começará em {hrs_left} hora(s)."
-            else:
-                next_day = day + 7
-                previsao = f"✅ A horda de hoje já passou. Próxima no Dia {next_day}."
-        else:
-            days_to_horde = horde_freq - daysFromHorde
-            next_horde_day = day + days_to_horde
-            previsao = f"🔮 Próxima lua de sangue no Dia {next_horde_day} (em {days_to_horde} dia(s))."
+        # Calcula os dias restantes para a próxima lua de sangue
+        # Considera que o ciclo é de 7 dias
+        dias_restantes = 7 - (day % 7) if (day % 7) != 0 else 0
 
+        # Define mensagens temáticas
+        if dias_restantes == 0:
+            # Se for o dia da lua
+            if hour >= 22 or hour < 4:
+                alerta = "💀 **ALERTA:** A Lua de Sangue está ocorrendo AGORA! Prepare-se para o apocalipse zumbi!"
+            else:
+                alerta = "⚠️ **Hoje é o dia da Lua de Sangue!** Ela começará às 22h. Mantenha-se atento!"
+        elif day % 7 == 1:
+            # Se for o início do ciclo
+            alerta = "📅 **Faltam 7 dias** para a Lua de Sangue. Tempo de se preparar e reforçar suas defesas!"
+        elif dias_restantes == 3:
+            alerta = "⏳ **Faltam 3 dias** para a Lua de Sangue. A tensão aumenta... Prepare-se!"
+        else:
+            alerta = f"🔮 Próxima Lua de Sangue em {dias_restantes} dia(s)."
+
+        # Cria o embed temático
         embed = discord.Embed(
             title="🌕⚠️ ALERTA: Lua de Sangue - Prepare-se para a Horda! ⚠️🌕",
-            description="O fim dos tempos se aproxima... Mantenha-se protegido e fique alerta!",
+            description="O apocalipse zumbi se aproxima. Reúna suas defesas e esteja preparado!",
             color=discord.Color.dark_red()
         )
         embed.add_field(
@@ -317,11 +315,11 @@ class SevenDaysCog(commands.Cog):
             inline=False
         )
         embed.add_field(
-            name="🔮 Previsão da Horda",
-            value=previsao,
+            name="🔮 Previsão",
+            value=alerta,
             inline=False
         )
-        embed.set_footer(text="CUIDADO: A lua de sangue pode trazer o apocalipse zumbi a qualquer momento!")
+        embed.set_footer(text="CUIDADO: A Lua de Sangue pode desencadear a horda a qualquer momento!")
         await interaction.followup.send(embed=embed, ephemeral=False)
 
     @app_commands.command(name="7dtd_players", description="Lista quantos/quais jogadores estão online no 7DTD.")
@@ -353,7 +351,6 @@ class SevenDaysCog(commands.Cog):
         lines = response.splitlines()
         total_msg = None
         player_names = set()
-
         for line in lines:
             line = line.strip()
             if line.startswith("Total of "):
@@ -366,14 +363,12 @@ class SevenDaysCog(commands.Cog):
                     name = parts[1].strip()
                     if name:
                         player_names.add(name)
-
         if total_msg is None:
             total_msg = "Não encontrei a contagem total de players."
         if player_names:
             players_str = ", ".join(sorted(player_names))
         else:
             players_str = "Nenhum player listado."
-
         embed = discord.Embed(
             title="Jogadores Online",
             description=f"{total_msg}\n\n**Lista**: {players_str}",
@@ -385,28 +380,22 @@ class SevenDaysCog(commands.Cog):
     async def on_message(self, message: discord.Message):
         """
         Se a mensagem for enviada no canal configurado (via /7dtd_channel) neste servidor,
-        envia a mensagem para o jogo utilizando o comando 'say' com o seguinte formato:
+        envia a mensagem para o jogo utilizando o comando 'say'.
         
-          say "[7289DA]DC[-] **Nome do Autor**: [00FFFF]Mensagem[-]"
-        
-        Assim, se você digitar "TESTE" no Discord, o comando enviado para o jogo será:
-        
-          say "[7289DA]DC[-] **Willi Tecnico**: [00FFFF]TESTE[-]"
+        Assim, se você digitar "TESTE" no Discord, o comando enviado será:
+          say "TESTE"
         """
         if message.author.bot or not message.guild:
             return
-
-        # Evita processar mensagens que já foram enviadas pelo jogo (começam com "say ")
         if message.content.lower().startswith("say "):
             return
-
         guild_id = str(message.guild.id)
         if guild_id in active_connections:
             conn = active_connections[guild_id]
             if conn.channel_id and message.channel.id == int(conn.channel_id):
                 if message.content.startswith("!"):
                     return
-                formatted_msg = f'say "[7289DA]DC[-] **{message.author.display_name}**: [00FFFF]{message.content}[-]"'
+                formatted_msg = f'say "{message.content}"'
                 try:
                     await conn.send_command(formatted_msg, wait_prompt=False)
                 except Exception as e:
