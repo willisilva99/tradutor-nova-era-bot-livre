@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-from discord.errors import NotFound, HTTPException
+from discord.errors import NotFound
 from sqlalchemy.orm import Session
 import asyncio
 import aiohttp
@@ -25,7 +25,7 @@ async def get_message(channel: discord.TextChannel, message_id: int):
 class ServerStatusCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Armazena o último status para alertas de mudança
+        # Guarda o status anterior para alertas de mudança
         self.last_status = {}
         self.status_task.start()
 
@@ -34,7 +34,8 @@ class ServerStatusCog(commands.Cog):
 
     async def fetch_embed(self, server_key: str) -> discord.Embed:
         """
-        Consulta a API do 7DTD para obter os dados do servidor e constrói um embed.
+        Consulta a API do 7DTD para obter dados do servidor e constrói um embed com
+        informações formatadas e emojis.
         Em caso de erro, retorna um embed de erro.
         """
         headers = {"Accept": "application/json"}
@@ -56,21 +57,21 @@ class ServerStatusCog(commands.Cog):
                     voters_data = await resp_voters.json(content_type=None)
         except Exception as e:
             embed = discord.Embed(
-                title="Erro ao obter dados do servidor",
-                description=f"Erro na consulta à API: {repr(e)}",
+                title="❌ Erro na API",
+                description=f"Ocorreu um erro ao consultar a API: {repr(e)}",
                 color=discord.Color.red()
             )
             return embed
 
         if not detail_data:
             embed = discord.Embed(
-                title="Erro",
+                title="❌ Erro",
                 description="A API não retornou informações.",
                 color=discord.Color.red()
             )
             return embed
 
-        # Extrai os dados do servidor
+        # Extração dos dados do servidor
         server_version = detail_data.get("version", "N/A")
         server_name = detail_data.get("name", "N/A")
         hostname = detail_data.get("hostname", "N/A")
@@ -82,31 +83,33 @@ class ServerStatusCog(commands.Cog):
         ip = detail_data.get("address", "N/A")
         port = detail_data.get("port", "N/A")
         online_status = detail_data.get("is_online", "0") == "1"
+
         status_emoji = "🟢" if online_status else "🔴"
         status_text = "Online" if online_status else "Offline"
         now = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
 
-        # Processa votos e votantes
+        # Processa votos
         votes_array = votes_data if isinstance(votes_data, list) else votes_data.get("votes", [])
         total_votes = len(votes_array)
         voters_list = voters_data if isinstance(voters_data, list) else voters_data.get("voters", [])
         top3 = sorted(voters_list, key=lambda v: int(v.get("votes", 0)), reverse=True)[:3]
         top3_str = ", ".join(f"{v.get('nickname', 'N/A')} ({v.get('votes', 0)})" for v in top3) if top3 else "N/A"
 
+        # Cria o embed com formatação aprimorada
         embed = discord.Embed(
             title=f"{status_emoji} {server_name} - Status",
             color=discord.Color.green() if online_status else discord.Color.red()
         )
-        embed.add_field(name="Localização", value=location, inline=True)
-        embed.add_field(name="Versão", value=server_version, inline=True)
-        embed.add_field(name="Hostname", value=hostname, inline=True)
-        embed.add_field(name="Jogadores", value=f"{players}/{maxplayers}", inline=True)
-        embed.add_field(name="Favoritos", value=f"{favorited}", inline=True)
-        embed.add_field(name="Uptime", value=f"{uptime}%", inline=True)
-        embed.add_field(name="IP", value=f"{ip}:{port}", inline=True)
-        embed.add_field(name="Status", value=status_text, inline=True)
-        embed.add_field(name="Total de Votos", value=str(total_votes), inline=True)
-        embed.add_field(name="Top 3 Votantes", value=top3_str, inline=False)
+        embed.add_field(name="🌍 Localização", value=f"**{location}**", inline=True)
+        embed.add_field(name="🔢 Versão", value=f"**{server_version}**", inline=True)
+        embed.add_field(name="💻 Hostname", value=f"**{hostname}**", inline=True)
+        embed.add_field(name="🎮 Jogadores", value=f"**{players}/{maxplayers}**", inline=True)
+        embed.add_field(name="⭐ Favoritos", value=f"**{favorited}**", inline=True)
+        embed.add_field(name="⏱ Uptime", value=f"**{uptime}%**", inline=True)
+        embed.add_field(name="📌 IP", value=f"**{ip}:{port}**", inline=True)
+        embed.add_field(name="🔔 Status", value=f"**{status_text}**", inline=True)
+        embed.add_field(name="📊 Total de Votos", value=f"**{total_votes}**", inline=True)
+        embed.add_field(name="🏆 Top 3 Votantes", value=f"**{top3_str}**", inline=False)
         embed.set_footer(text=f"Atualizado em: {now} | Atualiza a cada 5 minutos")
         return embed
 
@@ -138,7 +141,7 @@ class ServerStatusCog(commands.Cog):
             except Exception as e:
                 print(f"[ERROR] Erro ao editar mensagem de status para guild {config.guild_id}: {repr(e)}")
             
-            # Verifica mudança de status para alertas
+            # Envia alerta se houver mudança de status (online/offline)
             online = (embed.color.value == discord.Color.green().value)
             if config.guild_id in self.last_status:
                 if self.last_status[config.guild_id] and not online:
@@ -151,7 +154,7 @@ class ServerStatusCog(commands.Cog):
     async def serverstatus_config(self, interaction: discord.Interaction, server_key: str, canal: discord.TextChannel):
         """
         Configura o status do servidor:
-          - Consulta a API e envia o embed inicial no canal especificado.
+          - Consulta a API, envia o embed inicial no canal especificado.
           - Salva a ServerKey, o canal e o ID da mensagem enviada no banco de dados.
         """
         try:
