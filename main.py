@@ -90,6 +90,7 @@ async def load_cogs():
     await bot.load_extension("cogs.admin")
     await bot.load_extension("cogs.utility")
     await bot.load_extension("cogs.sevendays")
+    await bot.load_extension("cogs.serverstatus")
 
 async def main():
     await load_cogs()
