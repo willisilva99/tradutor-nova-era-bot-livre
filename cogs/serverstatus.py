@@ -23,42 +23,11 @@ async def get_message(channel: discord.TextChannel, message_id: int):
         raise NotFound(f"Mensagem {message_id} não encontrada no histórico.")
 
 class ServerStatusCog(commands.Cog):
-    @tasks.loop(minutes=5)
-    async def status_task(self):
-        """Atualiza o status dos servidores a cada 5 minutos."""
-        with SessionLocal() as session:
-            configs = session.query(ServerStatusConfig).all()
-        for config in configs:
-            embed = await self.fetch_embed(config.server_key)
-            channel = self.bot.get_channel(int(config.channel_id))
-            if not channel:
-                continue
-            try:
-                msg = await get_message(channel, int(config.message_id))
-                await msg.edit(embed=embed)
-            except NotFound as nf:
-                print(f"[LOG] Mensagem não encontrada para guild {config.guild_id}: {repr(nf)}")
-                try:
-                    msg = await channel.send(embed=embed)
-                    with SessionLocal() as session:
-                        cfg = session.query(ServerStatusConfig).filter_by(guild_id=str(config.guild_id)).first()
-                        if cfg:
-                            cfg.message_id = str(msg.id)
-                            session.commit()
-                    print(f"[LOG] Nova mensagem de status criada para guild {config.guild_id}")
-                except Exception as e2:
-                    print(f"[ERROR] Erro ao criar nova mensagem para guild {config.guild_id}: {repr(e2)}")
-            except Exception as e:
-                print(f"[ERROR] Erro ao editar mensagem de status para guild {config.guild_id}: {repr(e)}")
-            
-            # Verifica mudança de status para alertas
-            online = (embed.color.value == discord.Color.green().value)
-            if config.guild_id in self.last_status:
-                if self.last_status[config.guild_id] and not online:
-                    await channel.send("🔴 **Alerta:** O servidor está OFFLINE!")
-                elif not self.last_status[config.guild_id] and online:
-                    await channel.send("🟢 **O servidor voltou ONLINE!**")
-            self.last_status[config.guild_id] = online
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        # Guarda o último status (True = Online, False = Offline) para enviar alertas de mudança
+        self.last_status = {}
+        self.status_task.start()
 
     async def fetch_embed(self, server_key: str) -> discord.Embed:
         """
@@ -124,7 +93,7 @@ class ServerStatusCog(commands.Cog):
         top3 = sorted(voters_list, key=lambda v: int(v.get("votes", 0)), reverse=True)[:3]
         top3_str = ", ".join(f"{v.get('nickname', 'N/A')} ({v.get('votes', 0)})" for v in top3) if top3 else "N/A"
 
-        # Cria o embed com formatação e emojis
+        # Cria o embed com formatação aprimorada e emojis
         embed = discord.Embed(
             title=f"{status_emoji} {server_name} - Status",
             color=discord.Color.green() if online_status else discord.Color.red()
@@ -139,67 +108,59 @@ class ServerStatusCog(commands.Cog):
         embed.add_field(name="🔔 Status", value=f"**{status_text}**", inline=True)
         embed.add_field(name="📊 Total de Votos", value=f"**{total_votes}**", inline=True)
         embed.add_field(name="🏆 Top 3 Votantes", value=f"**{top3_str}**", inline=False)
-        embed.set_footer(text=f"Atualizado em: {now} | Reaja com 🔄 para atualizar")
+        embed.set_footer(text=f"Atualizado em: {now} | Atualiza a cada 5 minutos")
         # Adiciona o GIF na parte inferior do embed
-        embed.set_image(url="https://imgur.com/06NhXIJ.gif")
+        embed.set_image(url="https://imgur.com/oOfp23C.gif")
         return embed
 
-    @commands.Cog.listener()
-    async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
-        """
-        Quando alguém reage com "🔄" na mensagem de status, o bot remove essa reação,
-        deleta a mensagem e reenvia o embed atualizado.
-        """
-        if user.bot:
-            return
-        if str(reaction.emoji) != "🔄":
-            return
-
-        message = reaction.message
-
+    @tasks.loop(minutes=5)
+    async def status_task(self):
+        """Atualiza automaticamente o status de todos os servidores a cada 5 minutos."""
         with SessionLocal() as session:
-            config = session.query(ServerStatusConfig).filter_by(message_id=str(message.id)).first()
-        if not config:
-            return  # Não é uma mensagem de status registrada
+            configs = session.query(ServerStatusConfig).all()
+        for config in configs:
+            embed = await self.fetch_embed(config.server_key)
+            channel = self.bot.get_channel(int(config.channel_id))
+            if not channel:
+                continue
+            try:
+                msg = await get_message(channel, int(config.message_id))
+                await msg.edit(embed=embed)
+            except NotFound as nf:
+                print(f"[LOG] Mensagem não encontrada para guild {config.guild_id}: {repr(nf)}")
+                try:
+                    msg = await channel.send(embed=embed)
+                    with SessionLocal() as session:
+                        cfg = session.query(ServerStatusConfig).filter_by(guild_id=str(config.guild_id)).first()
+                        if cfg:
+                            cfg.message_id = str(msg.id)
+                            session.commit()
+                    print(f"[LOG] Nova mensagem de status criada para guild {config.guild_id}")
+                except Exception as e2:
+                    print(f"[ERROR] Erro ao criar nova mensagem para guild {config.guild_id}: {repr(e2)}")
+            except Exception as e:
+                print(f"[ERROR] Erro ao editar mensagem de status para guild {config.guild_id}: {repr(e)}")
+            
+            # Verifica mudança de status para enviar alertas
+            online = (embed.color.value == discord.Color.green().value)
+            if config.guild_id in self.last_status:
+                if self.last_status[config.guild_id] and not online:
+                    await channel.send("🔴 **Alerta:** O servidor está OFFLINE!")
+                elif not self.last_status[config.guild_id] and online:
+                    await channel.send("🟢 **O servidor voltou ONLINE!**")
+            self.last_status[config.guild_id] = online
 
-        try:
-            await message.remove_reaction("🔄", user)
-        except Exception as e:
-            print(f"[ERROR] Ao remover reação: {repr(e)}")
-
-        channel = message.channel
-        new_embed = await self.fetch_embed(config.server_key)
-        try:
-            await message.delete()
-        except Exception as e:
-            print(f"[ERROR] Ao deletar mensagem: {repr(e)}")
-        new_msg = await channel.send(embed=new_embed)
-        try:
-            await new_msg.add_reaction("🔄")
-        except Exception as e:
-            print(f"[ERROR] Ao adicionar reação à nova mensagem: {repr(e)}")
-        with SessionLocal() as session:
-            conf = session.query(ServerStatusConfig).filter_by(guild_id=str(message.guild.id)).first()
-            if conf:
-                conf.message_id = str(new_msg.id)
-                session.commit()
-        await channel.send("✅ Status atualizado!")
-
-    @app_commands.command(name="serverstatus_config", description="Configura o status do servidor 7DTD (atualiza por reação).")
+    @app_commands.command(name="serverstatus_config", description="Configura o status do servidor 7DTD (atualização automática).")
     async def serverstatus_config(self, interaction: discord.Interaction, server_key: str, canal: discord.TextChannel):
         """
         Configura o status do servidor:
           - Consulta a API e envia o embed inicial no canal especificado.
-          - Salva a ServerKey, o canal e o ID da mensagem enviada no banco.
+          - Salva a ServerKey, o canal e o ID da mensagem enviada no banco de dados.
         """
         try:
             await interaction.response.defer(thinking=True, ephemeral=True)
             embed = await asyncio.wait_for(self.fetch_embed(server_key), timeout=10)
             msg = await canal.send(embed=embed)
-            try:
-                await msg.add_reaction("🔄")
-            except Exception as e:
-                print(f"[ERROR] Ao adicionar reação à mensagem: {repr(e)}")
             with SessionLocal() as session:
                 config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild.id)).first()
                 if not config:
@@ -209,7 +170,7 @@ class ServerStatusCog(commands.Cog):
                 config.channel_id = str(canal.id)
                 config.message_id = str(msg.id)
                 session.commit()
-            await interaction.followup.send("✅ Configuração salva! Reaja com 🔄 à mensagem de status para atualizar.", ephemeral=True)
+            await interaction.followup.send("✅ Configuração salva! O status será atualizado automaticamente a cada 5 minutos.", ephemeral=True)
         except Exception as e:
             print(f"[ERROR] Erro no comando serverstatus_config: {repr(e)}")
             await interaction.followup.send(f"❌ Ocorreu um erro: {repr(e)}", ephemeral=True)
@@ -235,10 +196,6 @@ class ServerStatusCog(commands.Cog):
             except NotFound as nf:
                 print(f"[LOG] Mensagem não encontrada: {repr(nf)}")
                 msg = await channel.send(embed=embed)
-                try:
-                    await msg.add_reaction("🔄")
-                except Exception as e:
-                    print(f"[ERROR] Ao adicionar reação à nova mensagem: {repr(e)}")
                 with SessionLocal() as session:
                     conf = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild.id)).first()
                     conf.message_id = str(msg.id)
@@ -275,11 +232,6 @@ class ServerStatusCog(commands.Cog):
         except Exception as e:
             print(f"[ERROR] Erro no comando serverstatus_remove: {repr(e)}")
             await interaction.followup.send(f"❌ Ocorreu um erro: {repr(e)}", ephemeral=True)
-
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        self.last_status = {}
-        self.status_task.start()
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ServerStatusCog(bot))
