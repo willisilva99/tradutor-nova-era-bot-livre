@@ -128,7 +128,7 @@ class ServerStatusCog(commands.Cog):
             )
             return erro_embed, discord.ui.View()
         
-        # Extração dos dados
+        # Extração dos dados do servidor
         server_version = detail_data.get("version", "N/A")
         server_name = detail_data.get("name", "N/A")
         hostname = detail_data.get("hostname", "N/A")
@@ -141,7 +141,7 @@ class ServerStatusCog(commands.Cog):
         port = detail_data.get("port", "N/A")
         online_status = detail_data.get("is_online", "0") == "1"
         
-        # Define status e formatação
+        # Definindo status e formatação
         status_emoji = "🟢" if online_status else "🔴"
         status_text = "Online" if online_status else "Offline"
         color = discord.Color.green() if online_status else discord.Color.red()
@@ -168,11 +168,18 @@ class ServerStatusCog(commands.Cog):
         embed.add_field(name="🏆 Top 3 Votantes", value=top3_str, inline=False)
         embed.set_footer(text=f"Atualizado em: {now} | Atualiza a cada 5 minutos")
         
+        # Extrai o ID numérico do servidor, se disponível
+        server_id = detail_data.get("id", None)
+        if server_id is not None:
+            vote_url = f"https://7daystodie-servers.com/server/{server_id}/"
+        else:
+            vote_url = f"https://7daystodie-servers.com/server/{server_key}"
+        
         # Criação dos botões (apenas URLs HTTP)
         view = discord.ui.View()
         view.add_item(discord.ui.Button(
             label="🌐 Votar no Servidor",
-            url=f"https://7daystodie-servers.com/server/{server_key}",
+            url=vote_url,
             style=discord.ButtonStyle.link
         ))
         # Se desejar adicionar outro botão, certifique-se de usar URL http/https
@@ -184,7 +191,7 @@ class ServerStatusCog(commands.Cog):
     async def serverstatus_config(self, interaction: discord.Interaction, server_key: str, canal: discord.TextChannel):
         """
         Configura o status do servidor:
-          - Consulta a API, envia o embed inicial no canal especificado
+          - Consulta a API, envia o embed inicial no canal especificado.
           - Salva a ServerKey, o canal e o ID da mensagem enviada no DB.
         """
         try:
@@ -240,7 +247,7 @@ class ServerStatusCog(commands.Cog):
     async def serverstatus_remove(self, interaction: discord.Interaction):
         """
         Remove a configuração de status:
-          - Tenta deletar a mensagem de status (se existir)
+          - Tenta deletar a mensagem de status (se existir).
           - Remove a configuração do banco de dados.
         """
         try:
