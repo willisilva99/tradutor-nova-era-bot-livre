@@ -24,18 +24,8 @@ class Cache:
     def set(self, key, valor):
         self.data[key] = (valor, datetime.now().timestamp())
 
-# Cache armazenando tuplas (embed, vote_url)
+# Cache armazenando apenas o embed
 embed_cache = Cache(ttl=60)
-
-def create_view(vote_url: str) -> discord.ui.View:
-    """Cria um novo View com o botão de votar."""
-    view = discord.ui.View()
-    view.add_item(discord.ui.Button(
-        label="🌐 Votar no Servidor",
-        url=vote_url,
-        style=discord.ButtonStyle.link
-    ))
-    return view
 
 async def get_message(channel: discord.TextChannel, message_id: int):
     """
@@ -65,17 +55,16 @@ class ServerStatusCog(commands.Cog):
         with SessionLocal() as session:
             configs = session.query(ServerStatusConfig).all()
         for config in configs:
-            embed, vote_url = await self.fetch_status_embed(config.server_key)
-            view = create_view(vote_url)
+            embed = await self.fetch_status_embed(config.server_key)
             channel = self.bot.get_channel(int(config.channel_id))
             if channel:
                 try:
                     msg = await get_message(channel, int(config.message_id))
-                    await msg.edit(embed=embed, view=view)
+                    await msg.edit(embed=embed)
                 except NotFound as nf:
                     print(f"[LOG] Mensagem não encontrada para guild {config.guild_id}: {repr(nf)}")
                     try:
-                        msg = await channel.send(embed=embed, view=view)
+                        msg = await channel.send(embed=embed)
                         with SessionLocal() as session:
                             cfg = session.query(ServerStatusConfig).filter_by(guild_id=str(config.guild_id)).first()
                             if cfg:
@@ -101,7 +90,7 @@ class ServerStatusCog(commands.Cog):
         Consulta a API do 7DTD para obter:
           - Detalhes do servidor (versão, nome, hostname, localização, IP, porta, jogadores, favoritos, uptime e status)
           - Total de votos e Top 3 votantes.
-        Retorna um embed formatado e o vote_url para o botão.
+        Retorna um embed formatado.
         Utiliza cache para reduzir requisições repetidas.
         """
         cached = embed_cache.get(server_key)
@@ -135,7 +124,7 @@ class ServerStatusCog(commands.Cog):
                 description=repr(e), 
                 color=discord.Color.red()
             )
-            return erro_embed, ""
+            return erro_embed
         
         if not detail_data:
             erro_embed = discord.Embed(
@@ -143,7 +132,7 @@ class ServerStatusCog(commands.Cog):
                 description="A API não retornou informações.", 
                 color=discord.Color.red()
             )
-            return erro_embed, ""
+            return erro_embed
         
         server_version = detail_data.get("version", "N/A")
         server_name = detail_data.get("name", "N/A")
@@ -182,14 +171,8 @@ class ServerStatusCog(commands.Cog):
         embed.add_field(name="🏆 Top 3 Votantes", value=top3_str, inline=False)
         embed.set_footer(text=f"Atualizado em: {now} | Atualiza a cada 5 minutos")
         
-        server_id = detail_data.get("id", None)
-        if server_id is not None:
-            vote_url = f"https://7daystodie-servers.com/server/{server_id}/"
-        else:
-            vote_url = f"https://7daystodie-servers.com/server/{server_key}"
-        
-        embed_cache.set(server_key, (embed, vote_url))
-        return embed, vote_url
+        embed_cache.set(server_key, embed)
+        return embed
 
     @app_commands.command(name="serverstatus_config", description="Configura o status do servidor 7DTD para atualização automática.")
     async def serverstatus_config(self, interaction: discord.Interaction, server_key: str, canal: discord.TextChannel):
@@ -200,9 +183,8 @@ class ServerStatusCog(commands.Cog):
         """
         try:
             await interaction.response.defer(thinking=True, ephemeral=True)
-            embed, vote_url = await asyncio.wait_for(self.fetch_status_embed(server_key), timeout=10)
-            view = create_view(vote_url)
-            msg = await canal.send(embed=embed, view=view)
+            embed = await asyncio.wait_for(self.fetch_status_embed(server_key), timeout=10)
+            msg = await canal.send(embed=embed)
             with SessionLocal() as session:
                 config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild.id)).first()
                 if not config:
@@ -231,20 +213,19 @@ class ServerStatusCog(commands.Cog):
                 await interaction.followup.send("Nenhuma configuração encontrada. Use /serverstatus_config para configurar.")
                 return
 
-            embed, vote_url = await self.fetch_status_embed(config.server_key)
-            view = create_view(vote_url)
+            embed = await self.fetch_status_embed(config.server_key)
             channel = interaction.channel
             try:
                 msg = await get_message(channel, int(config.message_id))
             except NotFound as nf:
                 print(f"[LOG] Não foi possível buscar a mensagem registrada: {repr(nf)}")
-                msg = await channel.send(embed=embed, view=view)
+                msg = await channel.send(embed=embed)
                 with SessionLocal() as session:
                     config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild.id)).first()
                     config.message_id = str(msg.id)
                     session.commit()
 
-            await interaction.followup.send(embed=embed, view=view)
+            await interaction.followup.send(embed=embed)
         except Exception as e:
             print(f"[ERROR] Erro no comando serverstatus_show: {repr(e)}")
             await interaction.followup.send(f"❌ Ocorreu um erro: {repr(e)}", ephemeral=True)
