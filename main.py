@@ -4,7 +4,7 @@ import random
 import discord
 from discord.ext import commands, tasks
 
-# Importe seu DB e o dicionário/conexão do sevendays
+# Importe seu DB e a conexão do sevendays
 from db import SessionLocal, ServerConfig
 from cogs.sevendays import TelnetConnection, active_connections
 
@@ -32,65 +32,55 @@ async def change_status():
 
 @bot.event
 async def on_ready():
+    if getattr(bot, "ready_flag", False):
+        return  # Se já rodou uma vez, não executa novamente
+
+    bot.ready_flag = True
     print(f"✅ Bot conectado como {bot.user}")
 
-    # Define um status inicial
-    activity = discord.Game(name="sesh.fyi | /help")
-    await bot.change_presence(activity=activity)
-
-    # Sincroniza comandos
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ {len(synced)} comandos de slash sincronizados!")
-    except Exception as e:
-        print(f"❌ Erro ao sincronizar comandos: {e}")
+    await bot.tree.sync()
+    print(f"✅ Comandos de Slash sincronizados!")
 
     if not change_status.is_running():
         change_status.start()
 
-    # Restaura conexões do DB (opcional, mas recomendado)
     restore_telnet_connections()
 
     print("Bot está pronto!")
 
 def restore_telnet_connections():
-    """
-    Lê todas as configs do DB e recria as conexões Telnet
-    para cada guild com IP/porta/senha configurados.
-    """
+    """Restaura conexões Telnet do banco de dados."""
     with SessionLocal() as session:
         configs = session.query(ServerConfig).all()
         for cfg in configs:
-            guild_id = cfg.guild_id
-            # Se já houver, paramos e recriamos
-            if guild_id in active_connections:
-                active_connections[guild_id].stop()
-                del active_connections[guild_id]
+            try:
+                guild_id = cfg.guild_id
+                if guild_id in active_connections:
+                    active_connections[guild_id].stop()
+                    del active_connections[guild_id]
 
-            ip = cfg.ip
-            port = cfg.port
-            password = cfg.password
-            channel_id = cfg.channel_id
-
-            # Cria a TelnetConnection
-            conn = TelnetConnection(
-                guild_id=guild_id,
-                ip=ip,
-                port=port,
-                password=password,
-                channel_id=channel_id,
-                bot=bot
-            )
-            active_connections[guild_id] = conn
-            conn.start()
-
+                conn = TelnetConnection(
+                    guild_id=guild_id,
+                    ip=cfg.ip,
+                    port=cfg.port,
+                    password=cfg.password,
+                    channel_id=cfg.channel_id,
+                    bot=bot
+                )
+                active_connections[guild_id] = conn
+                conn.start()
+            except Exception as e:
+                print(f"❌ Erro ao restaurar Telnet para {guild_id}: {e}")
     print("✅ Conexões Telnet restauradas a partir do DB.")
 
 async def load_cogs():
-    await bot.load_extension("cogs.admin")
-    await bot.load_extension("cogs.utility")
-    await bot.load_extension("cogs.sevendays")
-    await bot.load_extension("cogs.serverstatus")
+    cogs = ["cogs.admin", "cogs.utility", "cogs.sevendays", "cogs.serverstatus"]
+    for cog in cogs:
+        try:
+            await bot.load_extension(cog)
+            print(f"✅ Cog carregado: {cog}")
+        except Exception as e:
+            print(f"❌ Erro ao carregar {cog}: {e}")
 
 async def main():
     await load_cogs()
