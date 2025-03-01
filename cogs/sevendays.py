@@ -395,7 +395,7 @@ class SevenDaysCog(commands.Cog):
             if conn.channel_id and message.channel.id == int(conn.channel_id):
                 if message.content.startswith("!"):
                     return
-                formatted_msg = f'say "[7289DA][DC][-][[FFD700]{message.author.display_name}]:[00FFFF]{message.content}[-]"'
+                formatted_msg = f'say "[7289DA][DC][-][[FFD700]{message.author.display_name}[-]]:[00FFFF]{message.content}[-]"'
                 try:
                     await conn.send_command(formatted_msg, wait_prompt=False)
                 except Exception as e:
