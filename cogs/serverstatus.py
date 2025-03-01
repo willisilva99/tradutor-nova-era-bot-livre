@@ -105,24 +105,20 @@ class ServerStatusCog(commands.Cog):
         status_cache.set(server_key, (embed, view))
         return embed, view
 
-    @app_commands.command(name="serverstatus_show", description="Exibe o status do servidor agora mesmo.")
-    async def serverstatus_show(self, interaction: discord.Interaction):
-        await interaction.response.defer(thinking=True, ephemeral=False)
+    @app_commands.command(name="serverstatus_config", description="Configura o status do servidor 7DTD para atualização automática.")
+    async def serverstatus_config(self, interaction: discord.Interaction, server_key: str, canal: discord.TextChannel):
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        msg = await canal.send("⏳ Configurando status do servidor...")
         with SessionLocal() as session:
             config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild_id)).first()
-        if not config:
-            await interaction.followup.send("⚠️ Nenhuma configuração encontrada. Use /serverstatus_config.", ephemeral=False)
-            return
-        embed, view = await self.fetch_status_embed(config.server_key)
-        if not config.message_id:
-            msg = await interaction.followup.send(embed=embed, view=view, ephemeral=False)
-            with SessionLocal() as session:
-                config.message_id = str(msg.id)
-                session.commit()
-        else:
-            channel = interaction.client.get_channel(int(config.channel_id))  # Correção aqui
-            msg = await channel.fetch_message(int(config.message_id))
-            await msg.edit(embed=embed, view=view)
+            if not config:
+                config = ServerStatusConfig(guild_id=str(interaction.guild_id))
+                session.add(config)
+            config.server_key = server_key
+            config.channel_id = str(canal.id)
+            config.message_id = str(msg.id)
+            session.commit()
+        await interaction.followup.send("✅ Configuração salva! O status será atualizado automaticamente.", ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ServerStatusCog(bot))
