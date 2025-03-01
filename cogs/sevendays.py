@@ -73,23 +73,16 @@ class TelnetConnection:
         Eventos tratados:
           - Mensagem de chat:
             Ex.: Chat (from 'Steam_xxx', entity id '189', to 'Global'): 'Nome': Mensagem
-            → 💬 **[CHAT] {nome}**: {mensagem}
-          
+            → Formata como: 💬 **[CHAT] Nome**: Mensagem
           - Morte:
-            GMSG: Player 'Nome' died
-            → 💀 **[CHAT] {nome}** morreu
-          
+            → 💀 **[CHAT] Nome** morreu
           - Saída:
-            GMSG: Player 'Nome' left the game
-            → 🚪 **[CHAT] {nome}** saiu do jogo
-          
+            → 🚪 **[CHAT] Nome** saiu do jogo
           - Entrada:
-            GMSG: Player 'Nome' joined the game
-            ou RequestToEnterGame: .../Nome
-            → 🟢 **[CHAT] {nome}** entrou no jogo
-        
-        Linhas que não baterem com nenhum padrão são ignoradas.
+            → 🟢 **[CHAT] Nome** entrou no jogo
         """
+        # Debug: imprimir linha recebida
+        print(f"[TelnetConnection][guild={self.guild_id}] Linha recebida: {line}")
         if self.last_line == line:
             return
         self.last_line = line
@@ -108,7 +101,6 @@ class TelnetConnection:
             if match:
                 name = match.group(4)
                 message = match.group(5)
-                # Mensagem de chat: sem cor no conteúdo, conforme solicitado
                 formatted = f"💬 **[CHAT] {name}**: {message}"
             else:
                 return
@@ -146,8 +138,9 @@ class TelnetConnection:
         else:
             return
 
-        # Para mensagens vindas do jogo, o prefixo não é necessário, mas se desejado pode ser adicionado.
-        # Neste exemplo, o formato solicitado já inclui o emoji e o [CHAT] em negrito.
+        # Adiciona o prefixo de Discord formatado: [DC] com cor 7289DA
+        if formatted:
+            formatted = f"[7289DA]DC[-] {formatted}"
         if self.channel_id and formatted:
             channel = self.bot.get_channel(int(self.channel_id))
             if channel:
@@ -364,7 +357,7 @@ class SevenDaysCog(commands.Cog):
             elif "EntityID" in line:
                 continue  # Ignora cabeçalho
             else:
-                # Supondo que o formato seja: "189 John ..." onde a segunda coluna é o nome
+                # Supomos que o formato seja: "189 John ..." onde a segunda coluna é o nome
                 parts = line.split()
                 if len(parts) >= 2:
                     name = parts[1].strip()
@@ -390,7 +383,7 @@ class SevenDaysCog(commands.Cog):
         """
         Se a mensagem for enviada no canal configurado (via /7dtd_channel) neste servidor,
         envia a mensagem para o jogo utilizando o comando 'say' com a formatação:
-          say "[7289DA]DC[-] **{Nome do Autor}**: [00FFFF]{Mensagem}[-]"
+          say "[7289DA]DC[-] **Nome do Autor**: [00FFFF]Mensagem[-]"
         """
         if message.author.bot or not message.guild:
             return
@@ -398,7 +391,9 @@ class SevenDaysCog(commands.Cog):
         guild_id = str(message.guild.id)
         if guild_id in active_connections:
             conn = active_connections[guild_id]
+            # Verifica se a mensagem foi enviada no canal configurado
             if conn.channel_id and message.channel.id == int(conn.channel_id):
+                # Evita processar comandos do bot (por exemplo, mensagens que começam com "!")
                 if message.content.startswith("!"):
                     return
                 formatted_msg = f'say "[7289DA]DC[-] **{message.author.display_name}**: [00FFFF]{message.content}[-]"'
