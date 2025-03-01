@@ -24,7 +24,7 @@ class Cache:
     def set(self, key, valor):
         self.data[key] = (valor, datetime.now().timestamp())
 
-# Cachearemos apenas o embed (não o view)
+# Cache armazenando tuplas (embed, vote_url)
 embed_cache = Cache(ttl=60)
 
 def create_view(vote_url: str) -> discord.ui.View:
@@ -102,13 +102,11 @@ class ServerStatusCog(commands.Cog):
           - Detalhes do servidor (versão, nome, hostname, localização, IP, porta, jogadores, favoritos, uptime e status)
           - Total de votos e Top 3 votantes.
         Retorna um embed formatado e o vote_url para o botão.
-        Utiliza cache apenas para o embed.
+        Utiliza cache para reduzir requisições repetidas.
         """
-        cached_embed = embed_cache.get(server_key)
-        if cached_embed is not None:
-            # Precisamos recriar o vote_url para criar um novo View depois
-            vote_url = cached_embed.vote_url if hasattr(cached_embed, "vote_url") else ""
-            return cached_embed, vote_url
+        cached = embed_cache.get(server_key)
+        if cached is not None:
+            return cached
         
         headers = {"Accept": "application/json"}
         detail_url = f"https://7daystodie-servers.com/api/?object=servers&element=detail&key={server_key}&format=json"
@@ -184,16 +182,13 @@ class ServerStatusCog(commands.Cog):
         embed.add_field(name="🏆 Top 3 Votantes", value=top3_str, inline=False)
         embed.set_footer(text=f"Atualizado em: {now} | Atualiza a cada 5 minutos")
         
-        # Extrai o ID numérico do servidor, se disponível
         server_id = detail_data.get("id", None)
         if server_id is not None:
             vote_url = f"https://7daystodie-servers.com/server/{server_id}/"
         else:
             vote_url = f"https://7daystodie-servers.com/server/{server_key}"
         
-        # Armazenamos também o vote_url no embed (como atributo) para usar no cache
-        setattr(embed, "vote_url", vote_url)
-        embed_cache.set(server_key, embed)
+        embed_cache.set(server_key, (embed, vote_url))
         return embed, vote_url
 
     @app_commands.command(name="serverstatus_config", description="Configura o status do servidor 7DTD para atualização automática.")
