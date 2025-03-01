@@ -6,7 +6,7 @@ import asyncio
 import aiohttp
 import time
 
-from db import SessionLocal, ServerStatusConfig  # Certifique-se de que ServerStatusConfig está definido no db.py
+from db import SessionLocal, ServerStatusConfig  # Certifique-se de que ServerStatusConfig está definido no seu db.py
 
 class ServerStatusCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -35,9 +35,9 @@ class ServerStatusCog(commands.Cog):
         """
         Consulta as APIs do 7DTD e constrói um embed com:
           - Detalhes do servidor (versão, nome, hostname, localização, IP, porta, jogadores online, favoritos, uptime)
-          - Total de votos (calculado pelo tamanho do array de votos)
-          - Top 3 votantes (agrupados por nickname)
-        Caso a API não retorne informações adequadas, exibe um embed de erro.
+          - Total de votos (calculado com base no array retornado pelo endpoint de votos)
+          - Top 3 votantes (obtidos do endpoint de votantes, ordenados pelo campo "votes")
+        Caso ocorra algum erro, retorna um embed de erro.
         """
         headers = {"Accept": "application/json"}
         detail_url = f"https://7daystodie-servers.com/api/?object=servers&element=detail&key={server_key}&format=json"
@@ -57,11 +57,12 @@ class ServerStatusCog(commands.Cog):
                 )
             try:
                 async with session.get(votes_url, headers=headers) as r:
-                    votes_response = await r.json(content_type=None)
-                    if isinstance(votes_response, list):
-                        votes_array = votes_response
+                    votes_data = await r.json(content_type=None)
+                    # Se a resposta for um objeto, extrai o array, caso contrário, assume que é o array
+                    if isinstance(votes_data, list):
+                        votes_array = votes_data
                     else:
-                        votes_array = votes_response.get("votes", [])
+                        votes_array = votes_data.get("votes", [])
             except Exception as e:
                 print(f"Erro na consulta votes: {e}")
                 return discord.Embed(
@@ -71,11 +72,11 @@ class ServerStatusCog(commands.Cog):
                 )
             try:
                 async with session.get(voters_url, headers=headers) as r:
-                    voters_response = await r.json(content_type=None)
-                    if isinstance(voters_response, list):
-                        voters_list = voters_response
+                    voters_data = await r.json(content_type=None)
+                    if isinstance(voters_data, list):
+                        voters_list = voters_data
                     else:
-                        voters_list = voters_response.get("voters", [])
+                        voters_list = voters_data.get("voters", [])
             except Exception as e:
                 print(f"Erro na consulta voters: {e}")
                 return discord.Embed(
@@ -91,7 +92,7 @@ class ServerStatusCog(commands.Cog):
                 color=discord.Color.red()
             )
 
-        # Extração dos dados conforme os campos retornados pela API
+        # Extração dos dados conforme a estrutura da API
         server_version = detail_data.get("version", "N/A")
         server_name = detail_data.get("name", "N/A")
         hostname = detail_data.get("hostname", "N/A")
@@ -102,24 +103,16 @@ class ServerStatusCog(commands.Cog):
         uptime = detail_data.get("uptime", "N/A")
         ip = detail_data.get("address", "N/A")
         port = detail_data.get("port", "N/A")
+        # Se não houver campo de status, assumimos online (ajuste conforme necessário)
         online_status = detail_data.get("is_online", "0") == "1"
         status_text = "Online" if online_status else "Offline"
 
-        # Total de votos: calcula o tamanho do array de votos
+        # Total de votos: tamanho do array de votos
         total_votes = len(votes_array)
         
-        # Agrupa os votos por nickname
-        vote_counts = {}
-        for vote in votes_array:
-            nickname = vote.get("nickname", "N/A")
-            try:
-                vote_counts[nickname] = vote_counts.get(nickname, 0) + 1
-            except Exception:
-                vote_counts[nickname] = 1
-        
-        # Ordena os votantes por quantidade de votos e pega os top 3
-        top3 = sorted(vote_counts.items(), key=lambda item: item[1], reverse=True)[:3]
-        top3_str = ", ".join(f"{nickname} ({count})" for nickname, count in top3) if top3 else "N/A"
+        # Top 3 votantes: utiliza o endpoint de votantes
+        top3 = sorted(voters_list, key=lambda v: int(v.get("votes", 0)), reverse=True)[:3]
+        top3_str = ", ".join(f"{v.get('nickname', 'N/A')} ({v.get('votes', 0)})" for v in top3) if top3 else "N/A"
 
         embed = discord.Embed(
             title=f"Status do Servidor: {server_name}",
