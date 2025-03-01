@@ -24,7 +24,18 @@ class Cache:
     def set(self, key, valor):
         self.data[key] = (valor, datetime.now().timestamp())
 
-status_cache = Cache(ttl=60)
+# Cachearemos apenas o embed (não o view)
+embed_cache = Cache(ttl=60)
+
+def create_view(vote_url: str) -> discord.ui.View:
+    """Cria um novo View com o botão de votar."""
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(
+        label="🌐 Votar no Servidor",
+        url=vote_url,
+        style=discord.ButtonStyle.link
+    ))
+    return view
 
 async def get_message(channel: discord.TextChannel, message_id: int):
     """
@@ -54,7 +65,8 @@ class ServerStatusCog(commands.Cog):
         with SessionLocal() as session:
             configs = session.query(ServerStatusConfig).all()
         for config in configs:
-            embed, view = await self.fetch_status_embed(config.server_key)
+            embed, vote_url = await self.fetch_status_embed(config.server_key)
+            view = create_view(vote_url)
             channel = self.bot.get_channel(int(config.channel_id))
             if channel:
                 try:
@@ -89,11 +101,14 @@ class ServerStatusCog(commands.Cog):
         Consulta a API do 7DTD para obter:
           - Detalhes do servidor (versão, nome, hostname, localização, IP, porta, jogadores, favoritos, uptime e status)
           - Total de votos e Top 3 votantes.
-        Retorna um embed formatado e os botões.
-        Utiliza cache para reduzir requisições repetidas.
+        Retorna um embed formatado e o vote_url para o botão.
+        Utiliza cache apenas para o embed.
         """
-        if (cached := status_cache.get(server_key)):
-            return cached
+        cached_embed = embed_cache.get(server_key)
+        if cached_embed is not None:
+            # Precisamos recriar o vote_url para criar um novo View depois
+            vote_url = cached_embed.vote_url if hasattr(cached_embed, "vote_url") else ""
+            return cached_embed, vote_url
         
         headers = {"Accept": "application/json"}
         detail_url = f"https://7daystodie-servers.com/api/?object=servers&element=detail&key={server_key}&format=json"
@@ -122,7 +137,7 @@ class ServerStatusCog(commands.Cog):
                 description=repr(e), 
                 color=discord.Color.red()
             )
-            return erro_embed, discord.ui.View()
+            return erro_embed, ""
         
         if not detail_data:
             erro_embed = discord.Embed(
@@ -130,7 +145,7 @@ class ServerStatusCog(commands.Cog):
                 description="A API não retornou informações.", 
                 color=discord.Color.red()
             )
-            return erro_embed, discord.ui.View()
+            return erro_embed, ""
         
         server_version = detail_data.get("version", "N/A")
         server_name = detail_data.get("name", "N/A")
@@ -169,21 +184,17 @@ class ServerStatusCog(commands.Cog):
         embed.add_field(name="🏆 Top 3 Votantes", value=top3_str, inline=False)
         embed.set_footer(text=f"Atualizado em: {now} | Atualiza a cada 5 minutos")
         
+        # Extrai o ID numérico do servidor, se disponível
         server_id = detail_data.get("id", None)
         if server_id is not None:
             vote_url = f"https://7daystodie-servers.com/server/{server_id}/"
         else:
             vote_url = f"https://7daystodie-servers.com/server/{server_key}"
         
-        view = discord.ui.View()
-        view.add_item(discord.ui.Button(
-            label="🌐 Votar no Servidor",
-            url=vote_url,
-            style=discord.ButtonStyle.link
-        ))
-        
-        status_cache.set(server_key, (embed, view))
-        return embed, view
+        # Armazenamos também o vote_url no embed (como atributo) para usar no cache
+        setattr(embed, "vote_url", vote_url)
+        embed_cache.set(server_key, embed)
+        return embed, vote_url
 
     @app_commands.command(name="serverstatus_config", description="Configura o status do servidor 7DTD para atualização automática.")
     async def serverstatus_config(self, interaction: discord.Interaction, server_key: str, canal: discord.TextChannel):
@@ -194,7 +205,8 @@ class ServerStatusCog(commands.Cog):
         """
         try:
             await interaction.response.defer(thinking=True, ephemeral=True)
-            embed, view = await asyncio.wait_for(self.fetch_status_embed(server_key), timeout=10)
+            embed, vote_url = await asyncio.wait_for(self.fetch_status_embed(server_key), timeout=10)
+            view = create_view(vote_url)
             msg = await canal.send(embed=embed, view=view)
             with SessionLocal() as session:
                 config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild.id)).first()
@@ -208,6 +220,38 @@ class ServerStatusCog(commands.Cog):
             await interaction.followup.send("✅ Configuração salva! O status será atualizado automaticamente.", ephemeral=True)
         except Exception as e:
             print(f"[ERROR] Erro no comando serverstatus_config: {repr(e)}")
+            await interaction.followup.send(f"❌ Ocorreu um erro: {repr(e)}", ephemeral=True)
+
+    @app_commands.command(name="serverstatus_show", description="Exibe o status do servidor 7DTD imediatamente.")
+    async def serverstatus_show(self, interaction: discord.Interaction):
+        """
+        Exibe o status do servidor imediatamente.
+        Se a mensagem já existir, edita-a; se não, cria uma nova e atualiza o registro.
+        """
+        try:
+            await interaction.response.defer(thinking=True, ephemeral=False)
+            with SessionLocal() as session:
+                config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild.id)).first()
+            if not config:
+                await interaction.followup.send("Nenhuma configuração encontrada. Use /serverstatus_config para configurar.")
+                return
+
+            embed, vote_url = await self.fetch_status_embed(config.server_key)
+            view = create_view(vote_url)
+            channel = interaction.channel
+            try:
+                msg = await get_message(channel, int(config.message_id))
+            except NotFound as nf:
+                print(f"[LOG] Não foi possível buscar a mensagem registrada: {repr(nf)}")
+                msg = await channel.send(embed=embed, view=view)
+                with SessionLocal() as session:
+                    config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild.id)).first()
+                    config.message_id = str(msg.id)
+                    session.commit()
+
+            await interaction.followup.send(embed=embed, view=view)
+        except Exception as e:
+            print(f"[ERROR] Erro no comando serverstatus_show: {repr(e)}")
             await interaction.followup.send(f"❌ Ocorreu um erro: {repr(e)}", ephemeral=True)
 
     @app_commands.command(name="serverstatus_remove", description="Remove a configuração de status do servidor 7DTD.")
