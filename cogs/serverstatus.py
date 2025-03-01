@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 from discord.errors import NotFound
 from sqlalchemy.orm import Session
@@ -23,14 +23,42 @@ async def get_message(channel: discord.TextChannel, message_id: int):
         raise NotFound(f"Mensagem {message_id} não encontrada no histórico.")
 
 class ServerStatusCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        # Guarda o status anterior para alertas de mudança, se necessário
-        self.last_status = {}
-        self.status_task.start()
-
-    def cog_unload(self):
-        self.status_task.cancel()
+    @tasks.loop(minutes=5)
+    async def status_task(self):
+        """Atualiza o status dos servidores a cada 5 minutos."""
+        with SessionLocal() as session:
+            configs = session.query(ServerStatusConfig).all()
+        for config in configs:
+            embed = await self.fetch_embed(config.server_key)
+            channel = self.bot.get_channel(int(config.channel_id))
+            if not channel:
+                continue
+            try:
+                msg = await get_message(channel, int(config.message_id))
+                await msg.edit(embed=embed)
+            except NotFound as nf:
+                print(f"[LOG] Mensagem não encontrada para guild {config.guild_id}: {repr(nf)}")
+                try:
+                    msg = await channel.send(embed=embed)
+                    with SessionLocal() as session:
+                        cfg = session.query(ServerStatusConfig).filter_by(guild_id=str(config.guild_id)).first()
+                        if cfg:
+                            cfg.message_id = str(msg.id)
+                            session.commit()
+                    print(f"[LOG] Nova mensagem de status criada para guild {config.guild_id}")
+                except Exception as e2:
+                    print(f"[ERROR] Erro ao criar nova mensagem para guild {config.guild_id}: {repr(e2)}")
+            except Exception as e:
+                print(f"[ERROR] Erro ao editar mensagem de status para guild {config.guild_id}: {repr(e)}")
+            
+            # Verifica mudança de status para alertas
+            online = (embed.color.value == discord.Color.green().value)
+            if config.guild_id in self.last_status:
+                if self.last_status[config.guild_id] and not online:
+                    await channel.send("🔴 **Alerta:** O servidor está OFFLINE!")
+                elif not self.last_status[config.guild_id] and online:
+                    await channel.send("🟢 **O servidor voltou ONLINE!**")
+            self.last_status[config.guild_id] = online
 
     async def fetch_embed(self, server_key: str) -> discord.Embed:
         """
@@ -60,6 +88,7 @@ class ServerStatusCog(commands.Cog):
                 description=f"Ocorreu um erro ao consultar a API: {repr(e)}",
                 color=discord.Color.red()
             )
+            embed.set_image(url="https://imgur.com/oOfp23C.gif")
             return embed
 
         if not detail_data:
@@ -68,6 +97,7 @@ class ServerStatusCog(commands.Cog):
                 description="A API não retornou informações.",
                 color=discord.Color.red()
             )
+            embed.set_image(url="https://imgur.com/oOfp23C.gif")
             return embed
 
         # Dados do servidor
@@ -94,7 +124,7 @@ class ServerStatusCog(commands.Cog):
         top3 = sorted(voters_list, key=lambda v: int(v.get("votes", 0)), reverse=True)[:3]
         top3_str = ", ".join(f"{v.get('nickname', 'N/A')} ({v.get('votes', 0)})" for v in top3) if top3 else "N/A"
 
-        # Cria o embed com formatação aprimorada e espaçamentos
+        # Cria o embed com formatação e emojis
         embed = discord.Embed(
             title=f"{status_emoji} {server_name} - Status",
             color=discord.Color.green() if online_status else discord.Color.red()
@@ -110,6 +140,8 @@ class ServerStatusCog(commands.Cog):
         embed.add_field(name="📊 Total de Votos", value=f"**{total_votes}**", inline=True)
         embed.add_field(name="🏆 Top 3 Votantes", value=f"**{top3_str}**", inline=False)
         embed.set_footer(text=f"Atualizado em: {now} | Reaja com 🔄 para atualizar")
+        # Adiciona o GIF na parte inferior do embed
+        embed.set_image(url="https://imgur.com/oOfp23C.gif")
         return embed
 
     @commands.Cog.listener()
@@ -125,7 +157,6 @@ class ServerStatusCog(commands.Cog):
 
         message = reaction.message
 
-        # Verifica se a mensagem está registrada no banco
         with SessionLocal() as session:
             config = session.query(ServerStatusConfig).filter_by(message_id=str(message.id)).first()
         if not config:
@@ -244,6 +275,11 @@ class ServerStatusCog(commands.Cog):
         except Exception as e:
             print(f"[ERROR] Erro no comando serverstatus_remove: {repr(e)}")
             await interaction.followup.send(f"❌ Ocorreu um erro: {repr(e)}", ephemeral=True)
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.last_status = {}
+        self.status_task.start()
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ServerStatusCog(bot))
