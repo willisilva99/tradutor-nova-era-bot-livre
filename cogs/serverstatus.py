@@ -46,17 +46,29 @@ class ServerStatusCog(commands.Cog):
                 try:
                     msg = await channel.fetch_message(int(config.message_id))
                     await msg.edit(embed=embed, view=view)
-                    
-                    # Verifica a mudança de status
-                    online = (embed.color.value == discord.Color.green().value)
-                    if config.guild_id in self.ultimo_status_online:
-                        if self.ultimo_status_online[config.guild_id] and not online:
-                            await channel.send("🔴 **Alerta:** O servidor está **OFFLINE**!")
-                        elif not self.ultimo_status_online[config.guild_id] and online:
-                            await channel.send("🟢 **O servidor voltou a ficar ONLINE!**")
-                    self.ultimo_status_online[config.guild_id] = online
                 except Exception as e:
-                    print(f"Erro ao editar mensagem de status para guild {config.guild_id}: {e}")
+                    error_str = str(e)
+                    print(f"Erro ao editar mensagem de status para guild {config.guild_id}: {error_str}")
+                    # Se a mensagem não for encontrada, cria uma nova e atualiza o DB
+                    if "Unknown Message" in error_str or "10008" in error_str:
+                        try:
+                            msg = await channel.send(embed=embed, view=view)
+                            with SessionLocal() as session:
+                                cfg = session.query(ServerStatusConfig).filter_by(guild_id=str(config.guild_id)).first()
+                                if cfg:
+                                    cfg.message_id = str(msg.id)
+                                    session.commit()
+                            print(f"Nova mensagem de status criada para guild {config.guild_id}")
+                        except Exception as e2:
+                            print(f"Erro ao criar nova mensagem para guild {config.guild_id}: {e2}")
+                # Verifica a mudança de status e envia alertas
+                online = (embed.color.value == discord.Color.green().value)
+                if config.guild_id in self.ultimo_status_online:
+                    if self.ultimo_status_online[config.guild_id] and not online:
+                        await channel.send("🔴 **Alerta:** O servidor está **OFFLINE**!")
+                    elif not self.ultimo_status_online[config.guild_id] and online:
+                        await channel.send("🟢 **O servidor voltou a ficar ONLINE!**")
+                self.ultimo_status_online[config.guild_id] = online
 
     async def fetch_status_embed(self, server_key: str):
         """
@@ -66,7 +78,7 @@ class ServerStatusCog(commands.Cog):
         Retorna um embed formatado e os botões.
         Utiliza cache para reduzir requisições repetidas.
         """
-        # Se houver cache válido, retorna-o
+        # Retorna o cache se existir
         if (cached := status_cache.get(server_key)):
             return cached
         
@@ -77,12 +89,12 @@ class ServerStatusCog(commands.Cog):
         
         try:
             async with aiohttp.ClientSession() as session:
-                # Detalhes do servidor
+                # Consulta de detalhes do servidor
                 response = await asyncio.wait_for(session.get(detail_url, headers=headers), timeout=10)
                 async with response:
                     detail_data = await response.json(content_type=None)
                 
-                # Total de votos
+                # Consulta total de votos
                 response_votes = await asyncio.wait_for(session.get(votes_url, headers=headers), timeout=10)
                 async with response_votes:
                     votes_data = await response_votes.json(content_type=None)
@@ -91,7 +103,7 @@ class ServerStatusCog(commands.Cog):
                 else:
                     votes_array = votes_data.get("votes", [])
                 
-                # Votantes
+                # Consulta dos votantes
                 response_voters = await asyncio.wait_for(session.get(voters_url, headers=headers), timeout=10)
                 async with response_voters:
                     voters_data = await response_voters.json(content_type=None)
@@ -116,7 +128,7 @@ class ServerStatusCog(commands.Cog):
             )
             return erro_embed, discord.ui.View()
         
-        # Extração dos dados do servidor
+        # Extração dos dados
         server_version = detail_data.get("version", "N/A")
         server_name = detail_data.get("name", "N/A")
         hostname = detail_data.get("hostname", "N/A")
@@ -129,13 +141,13 @@ class ServerStatusCog(commands.Cog):
         port = detail_data.get("port", "N/A")
         online_status = detail_data.get("is_online", "0") == "1"
         
-        # Definindo emoji, cor e status
+        # Define status e formatação
         status_emoji = "🟢" if online_status else "🔴"
         status_text = "Online" if online_status else "Offline"
         color = discord.Color.green() if online_status else discord.Color.red()
         now = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
         
-        # Cálculo dos votos
+        # Cálculo de votos e top 3 votantes
         total_votes = len(votes_array)
         top3 = sorted(voters_list, key=lambda v: int(v.get("votes", 0)), reverse=True)[:3]
         top3_str = ", ".join(f"{v.get('nickname', 'N/A')} ({v.get('votes', 0)})" for v in top3) if top3 else "N/A"
@@ -156,14 +168,14 @@ class ServerStatusCog(commands.Cog):
         embed.add_field(name="🏆 Top 3 Votantes", value=top3_str, inline=False)
         embed.set_footer(text=f"Atualizado em: {now} | Atualiza a cada 5 minutos")
         
-        # Criação dos botões (apenas botão HTTP é permitido)
+        # Criação dos botões (apenas URLs HTTP)
         view = discord.ui.View()
         view.add_item(discord.ui.Button(
             label="🌐 Votar no Servidor",
             url=f"https://7daystodie-servers.com/server/{server_key}",
             style=discord.ButtonStyle.link
         ))
-        # Se desejar, pode criar outro botão com link HTTP para outra ação
+        # Se desejar adicionar outro botão, certifique-se de usar URL http/https
         
         status_cache.set(server_key, (embed, view))
         return embed, view
