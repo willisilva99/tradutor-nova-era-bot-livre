@@ -141,7 +141,7 @@ class ServerStatusCog(commands.Cog):
         embed.add_field(name="🏆 Top 3 Votantes", value=f"**{top3_str}**", inline=False)
         embed.set_footer(text=f"Atualizado em: {now} | Reaja com 🔄 para atualizar")
         # Adiciona o GIF na parte inferior do embed
-        embed.set_image(url="https://imgur.com/oOfp23C.gif")
+        embed.set_image(url="https://imgur.com/06NhXIJ.gif")
         return embed
 
     @commands.Cog.listener()
