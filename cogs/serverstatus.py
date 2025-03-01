@@ -104,6 +104,10 @@ class ServerStatusCog(commands.Cog):
         
         status_cache.set(server_key, (embed, view))
         return embed, view
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print("✅ Comandos de Slash sincronizados!")
 
     @app_commands.command(name="serverstatus_show", description="Exibe o status do servidor agora mesmo.")
     async def serverstatus_show(self, interaction: discord.Interaction):
