@@ -72,7 +72,6 @@ class ServerStatusCog(commands.Cog):
         
         try:
             async with aiohttp.ClientSession() as session:
-                # Aguarda a resposta com timeout
                 response = await asyncio.wait_for(session.get(detail_url, headers=headers), timeout=10)
                 async with response:
                     detail_data = await response.json(content_type=None)
@@ -131,11 +130,8 @@ class ServerStatusCog(commands.Cog):
             url=f"https://7daystodie-servers.com/server/{server_key}", 
             style=discord.ButtonStyle.link
         ))
-        view.add_item(discord.ui.Button(
-            label="🎮 Jogar Agora", 
-            url=f"steam://connect/{ip}:{port}", 
-            style=discord.ButtonStyle.link
-        ))
+        # Removemos o botão "Jogar Agora" devido à restrição de URL
+        # Caso deseje outra ação, adicione aqui um botão com URL http/https.
         
         status_cache.set(server_key, (embed, view))
         return embed, view
@@ -203,4 +199,3 @@ class ServerStatusCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ServerStatusCog(bot))
-
