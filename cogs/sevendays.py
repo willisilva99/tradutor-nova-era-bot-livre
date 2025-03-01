@@ -250,27 +250,31 @@ class SevenDaysCog(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"Erro ao executar 'version': {e}", ephemeral=True)
 
-    @app_commands.command(name="7dtd_bloodmoon", description="Mostra quando ocorre a próxima lua de sangue.")
+       @app_commands.command(name="7dtd_bloodmoon", description="Mostra quando ocorre a próxima lua de sangue.")
     async def bloodmoon_status(self, interaction: discord.Interaction):
         """
         Chama 'gettime' e faz parse de "Day 14, 12:34" para calcular a próxima lua de sangue.
+        Exibe um embed temático com alerta apocalíptico.
         """
-        await interaction.response.defer(thinking=True, ephemeral=True)
+        # Responde de forma pública para que todos vejam
+        await interaction.response.defer(thinking=True, ephemeral=False)
         guild_id = str(interaction.guild_id)
+        
         if guild_id not in active_connections:
             with SessionLocal() as session:
                 cfg = session.query(ServerConfig).filter_by(guild_id=guild_id).first()
                 if not cfg:
-                    await interaction.followup.send("Nenhum servidor configurado. Use /7dtd_addserver primeiro.", ephemeral=True)
+                    await interaction.followup.send("Nenhum servidor configurado. Use /7dtd_addserver primeiro.", ephemeral=False)
                     return
                 conn = TelnetConnection(guild_id, cfg.ip, cfg.port, cfg.password, cfg.channel_id, self.bot)
                 active_connections[guild_id] = conn
                 conn.start()
+                
         conn = active_connections[guild_id]
         try:
             response = await conn.send_command("gettime")
         except Exception as e:
-            await interaction.followup.send(f"Erro ao obter horário do servidor: {e}", ephemeral=True)
+            await interaction.followup.send(f"Erro ao obter horário do servidor: {e}", ephemeral=False)
             return
 
         day = None
@@ -291,26 +295,47 @@ class SevenDaysCog(commands.Cog):
                         pass
 
         if day is None or hour is None:
-            await interaction.followup.send(f"Não foi possível parsear o horário:\n```\n{response}\n```", ephemeral=True)
+            await interaction.followup.send(f"Não foi possível parsear o horário:\n```\n{response}\n```", ephemeral=False)
             return
 
+        # Cálculo da previsão – consideramos que a horda ocorre a cada 7 dias,
+        # com início às 22h e duração até aproximadamente 04h do dia seguinte.
         horde_freq = 7
         daysFromHorde = day % horde_freq
-        message = f"Hoje é **Dia {day}, {hour:02d}:{minute:02d}** no servidor."
+
         if daysFromHorde == 0:
             if hour >= 22 or hour < 4:
-                message += "\n**A horda está acontecendo agora!**"
+                previsao = "💀 **ALERTA:** A horda está acontecendo AGORA!"
             elif hour < 22:
                 hrs_left = 22 - hour
-                message += f"\n**A horda começa em {hrs_left} hora(s).**"
+                previsao = f"⚠️ **Atenção:** A horda começará em {hrs_left} hora(s)."
             else:
                 next_day = day + 7
-                message += f"\nA horda de hoje já passou! Próxima no **Dia {next_day}**."
+                previsao = f"✅ A horda de hoje já passou. Próxima no Dia {next_day}."
         else:
             days_to_horde = horde_freq - daysFromHorde
             next_horde_day = day + days_to_horde
-            message += f"\nPróxima lua de sangue no **Dia {next_horde_day}** (em {days_to_horde} dia(s))."
-        await interaction.followup.send(message, ephemeral=True)
+            previsao = f"🔮 Próxima lua de sangue no Dia {next_horde_day} (em {days_to_horde} dia(s))."
+
+        # Cria um embed temático com o estilo "apocalipse zumbi"
+        embed = discord.Embed(
+            title="🌕⚠️ ALERTA: Lua de Sangue - Prepare-se para a Horda! ⚠️🌕",
+            description="O fim dos tempos se aproxima... Mantenha-se protegido e fique alerta!",
+            color=discord.Color.dark_red()
+        )
+        embed.add_field(
+            name="⏰ Hora Atual",
+            value=f"Hoje é **Dia {day}**, **{hour:02d}:{minute:02d}**",
+            inline=False
+        )
+        embed.add_field(
+            name="🔮 Previsão da Horda",
+            value=previsao,
+            inline=False
+        )
+        embed.set_footer(text="CUIDADO: A lua de sangue pode trazer o apocalipse zumbi a qualquer momento!")
+        await interaction.followup.send(embed=embed, ephemeral=False)
+
 
     @app_commands.command(name="7dtd_players", description="Lista quantos/quais jogadores estão online no 7DTD.")
     async def players_online(self, interaction: discord.Interaction):
