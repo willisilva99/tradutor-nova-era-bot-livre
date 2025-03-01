@@ -70,11 +70,12 @@ class ServerStatusCog(commands.Cog):
         headers = {"Accept": "application/json"}
         detail_url = f"https://7daystodie-servers.com/api/?object=servers&element=detail&key={server_key}&format=json"
         
-        # Usando timeout para evitar travamento
         try:
             async with aiohttp.ClientSession() as session:
-                async with asyncio.wait_for(session.get(detail_url, headers=headers), timeout=10) as r:
-                    detail_data = await r.json(content_type=None)
+                # Aguarda a resposta com timeout
+                response = await asyncio.wait_for(session.get(detail_url, headers=headers), timeout=10)
+                async with response:
+                    detail_data = await response.json(content_type=None)
         except Exception as e:
             print(f"Erro na consulta da API (detail): {e}")
             erro_embed = discord.Embed(
@@ -202,3 +203,4 @@ class ServerStatusCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ServerStatusCog(bot))
+
