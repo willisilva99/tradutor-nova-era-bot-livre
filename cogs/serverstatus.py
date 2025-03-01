@@ -6,6 +6,31 @@ import asyncio
 import aiohttp
 import time
 
+from db import SessionLocal, ServerStatusConfig  # Certifique-se de que ServerStatusConfig está definido no seu db.py
+
+class ServerStatusCog(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.status_task.start()
+
+    def cog_unload(self):
+        self.status_task.cancel()
+
+    @tasks.loop(minutes=10)
+    async def status_task(self):
+        """Atualiza o status de todos os servidores a cada 10 minutos."""
+        with SessionLocal() as session:
+            configs = session.query(ServerStatusConfig).all()
+        for config in configs:
+            embed = await self.fetch_status_embed(config.server_key)
+            channel = self.bot.get_channel(int(config.channel_id))
+            if channel:
+                try:
+                    msg = await channel.fetch_message(int(config.message_id))
+                    await msg.edit(embed=embed)
+                except Exception as e:
+                    print(f"Erro ao editar mensagem de status para guild {config.guild_id}: {e}")
+
     async def fetch_status_embed(self, server_key: str) -> discord.Embed:
         """
         Consulta as APIs do 7DTD e constrói um embed com:
@@ -51,7 +76,6 @@ import time
                     color=discord.Color.red()
                 )
 
-        # Verifica se o detail_data retornou algo
         if not detail_data:
             return discord.Embed(
                 title="Erro ao obter dados do servidor",
@@ -59,22 +83,22 @@ import time
                 color=discord.Color.red()
             )
 
-        # Extração dos dados usando os campos da resposta da API
+        # Extração dos dados conforme a estrutura fornecida pela API
         server_name = detail_data.get("name", "N/A")
         ip = detail_data.get("address", "N/A")
         port = detail_data.get("port", "N/A")
-        # Jogadores online não está disponível na resposta, então usamos "N/A"
+        # Jogadores online não consta na resposta; usamos "N/A"
         players = "N/A"
         max_players = "N/A"
         # Se não houver informação de status, assumimos online
         online_status = True
         status_text = "Online" if online_status else "Offline"
 
-        # Para votos: usamos o endpoint de votos que retorna um array em "votes"
+        # Para votos: usamos o array de votos; Total de votos será o tamanho desse array
         votes_array = votes_data.get("votes", [])
         total_votes = len(votes_array)
-        
-        # Para os top 3 votantes, ordenamos por "timestamp" (descendente)
+
+        # Para os top 3 votantes, ordenamos pelo timestamp (descendente)
         top3 = sorted(votes_array, key=lambda v: int(v.get("timestamp", 0)), reverse=True)[:3]
         top3_str = (
             ", ".join(f'{v.get("nickname", "N/A")} (Claimed: {v.get("claimed", "0")})' for v in top3)
@@ -92,7 +116,6 @@ import time
         embed.add_field(name="Top 3 Votantes", value=top3_str, inline=False)
         embed.set_footer(text="Atualizado em " + time.strftime("%d/%m/%Y %H:%M:%S"))
         return embed
-
 
     @app_commands.command(name="serverstatus_config", description="Configura o status do servidor 7DTD para atualização automática.")
     async def serverstatus_config(self, interaction: discord.Interaction, server_key: str, canal: discord.TextChannel):
