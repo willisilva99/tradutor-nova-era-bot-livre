@@ -120,7 +120,7 @@ class ServerStatusCog(commands.Cog):
         embed.add_field(name="🔢 Versão", value=server_version, inline=True)
         embed.add_field(name="🔗 Hostname", value=hostname, inline=True)
         embed.add_field(name="🎮 Jogadores", value=f"{players}/{maxplayers}", inline=True)
-        embed.add_field(name="⭐ Favoritos", value=favorited", inline=True)
+        embed.add_field(name="⭐ Favoritos", value=f"{favorited}", inline=True)
         embed.add_field(name="🕒 Uptime", value=f"{uptime}%", inline=True)
         embed.add_field(name="📌 IP", value=f"{ip}:{port}", inline=True)
         embed.set_footer(text=f"Atualizado em: {timestamp}")
