@@ -8,8 +8,8 @@ if not DATABASE_URL:
     raise ValueError("❌ ERRO: A variável de ambiente DATABASE_URL não está definida.")
 
 # ✅ Criar conexão com o banco de dados
-engine = create_engine(DATABASE_URL, echo=False)
-SessionLocal = sessionmaker(bind=engine)
+engine = create_engine(DATABASE_URL, echo=False, pool_size=10, max_overflow=20)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # ✅ Definição da Tabela `server_config`
@@ -18,9 +18,9 @@ class ServerConfig(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     guild_id = Column(String, index=True, nullable=False)
-    ip = Column(String, nullable=False)  # ✅ Removido limite de caracteres para compatibilidade com PostgreSQL
+    ip = Column(String, nullable=False)
     port = Column(Integer, nullable=False)
-    password = Column(String, nullable=True)  # ✅ Permitir `NULL` caso não tenha senha
+    password = Column(String, nullable=True)
     channel_id = Column(String, nullable=False)
 
 # ✅ Definição da Tabela `server_status_config`
@@ -29,9 +29,13 @@ class ServerStatusConfig(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     guild_id = Column(String, unique=True, index=True, nullable=False)
-    server_key = Column(String, nullable=False)  # ✅ Removido limite de caracteres
+    server_key = Column(String, nullable=False)
     channel_id = Column(String, nullable=False)
     message_id = Column(String, nullable=False)
 
 # ✅ Criar tabelas apenas se não existirem
-Base.metadata.create_all(engine, checkfirst=True)
+try:
+    Base.metadata.create_all(engine, checkfirst=True)
+    print("✅ Banco de dados configurado corretamente.")
+except Exception as e:
+    print(f"❌ ERRO ao configurar o banco de dados: {e}")
