@@ -61,26 +61,26 @@ class TelnetConnection:
     def handle_line(self, line: str):
         """
         Processa as linhas de saída do servidor 7DTD.
-        Apenas processa eventos de chat relevantes:
+        Filtra e formata eventos de chat:
         
-        - Mensagem de chat: 
-          Ex.: Chat (from 'Steam_xxx', entity id '189', to 'Global'): 'Nome': Mensagem
+        - Mensagem de chat (formato):
+          Chat (from 'Steam_xxx', entity id '...', to 'Global'): 'Nome': Mensagem
           → Formata como: 💬 **[CHAT] Nome**: Mensagem
-        
+          
         - Morte:
-          Ex.: GMSG: Player 'Nome' died
+          GMSG: Player 'Nome' died
           → Formata como: 💀 **[CHAT] Nome** morreu
-        
+          
         - Saída:
-          Ex.: GMSG: Player 'Nome' left the game
+          GMSG: Player 'Nome' left the game
           → Formata como: 🚪 **[CHAT] Nome** saiu do jogo
-        
+          
         - Entrada:
-          Ex.: GMSG: Player 'Nome' joined the game
-               ou RequestToEnterGame: .../Nome
+          GMSG: Player 'Nome' joined the game
+          ou RequestToEnterGame: .../Nome
           → Formata como: 🟢 **[CHAT] Nome** entrou no jogo
         
-        Linhas que não baterem com nenhum padrão são ignoradas.
+        Linhas que não corresponderem são ignoradas.
         """
         # Evita duplicação
         if self.last_line == line:
@@ -89,7 +89,7 @@ class TelnetConnection:
 
         formatted = None
 
-        # Padrões de regex para cada evento
+        # Padrões de regex para eventos
         chat_pattern = r"Chat \(from '([^']+)', entity id '([^']+)', to '([^']+)'\):\s*'([^']+)':\s*(.*)"
         death_pattern = r"GMSG: Player '([^']+)' died"
         left_pattern = r"GMSG: Player '([^']+)' left the game"
@@ -101,8 +101,7 @@ class TelnetConnection:
             if match:
                 name = match.group(4)
                 message = match.group(5)
-                # Formatação com emoji e negrito
-                formatted = f"💬 **[CHAT] {name}**: {message}"
+                formatted = f"💬 **[CHAT] {name}**: [00FFFF]{message}[-]"
             else:
                 return
         elif "GMSG: Player" in line:
@@ -137,8 +136,11 @@ class TelnetConnection:
             else:
                 return
         else:
-            # Ignora linhas que não correspondem aos padrões
             return
+
+        # Adiciona o prefixo de Discord com cor (exemplo: cor padrão Discord: 7289DA)
+        if formatted:
+            formatted = f'[7289DA][DC][-] {formatted}'
 
         if self.channel_id and formatted:
             channel = self.bot.get_channel(int(self.channel_id))
