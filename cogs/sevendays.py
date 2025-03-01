@@ -6,6 +6,7 @@ import asyncio
 import telnetlib
 import threading
 import re
+import time
 
 from db import SessionLocal, ServerConfig
 
@@ -15,7 +16,7 @@ active_connections = {}
 class TelnetConnection:
     """
     Classe responsável por manter a conexão Telnet com o servidor 7DTD.
-    Permite enviar comandos e ler outputs.
+    Permite enviar comandos, ler outputs e reconectar automaticamente.
     """
     def __init__(self, guild_id, ip, port, password, channel_id, bot):
         self.guild_id = guild_id
@@ -37,59 +38,65 @@ class TelnetConnection:
         self.thread.start()
 
     def run(self):
-        """Loop da thread que conecta ao Telnet e lê as linhas continuamente."""
-        try:
-            with self.lock:
-                self.telnet = telnetlib.Telnet(self.ip, self.port, timeout=10)
-                # Espera prompt de senha
-                self.telnet.read_until(b"password:", timeout=5)
-                # Envia a senha
-                self.telnet.write(self.password.encode("utf-8") + b"\r\n")
-                # Espera prompt final (por exemplo, ">")
-                self.telnet.read_until(b">", timeout=5)
-
-            while not self.stop_flag:
-                line = self.telnet.read_until(b"\n", timeout=1)
-                if line:
-                    decoded = line.decode("utf-8", errors="ignore").strip()
-                    if decoded:
-                        self.handle_line(decoded)
-        except Exception as e:
-            print(f"[TelnetConnection][guild={self.guild_id}] Erro Telnet: {e}")
+        """
+        Loop principal: tenta conectar e, em caso de erro, aguarda 5 segundos e reconecta.
+        """
+        while not self.stop_flag:
+            try:
+                with self.lock:
+                    self.telnet = telnetlib.Telnet(self.ip, self.port, timeout=20)
+                    # Espera prompt de senha
+                    self.telnet.read_until(b"password:", timeout=10)
+                    # Envia a senha
+                    self.telnet.write(self.password.encode("utf-8") + b"\r\n")
+                    # Espera prompt final (por exemplo, ">")
+                    self.telnet.read_until(b">", timeout=10)
+                print(f"[TelnetConnection][guild={self.guild_id}] Conectado com sucesso.")
+                # Loop de leitura
+                while not self.stop_flag:
+                    line = self.telnet.read_until(b"\n", timeout=1)
+                    if line:
+                        decoded = line.decode("utf-8", errors="ignore").strip()
+                        if decoded:
+                            self.handle_line(decoded)
+            except Exception as e:
+                print(f"[TelnetConnection][guild={self.guild_id}] Erro Telnet: {e}")
+            if not self.stop_flag:
+                print(f"[TelnetConnection][guild={self.guild_id}] Tentando reconectar em 5 segundos...")
+                time.sleep(5)
         print(f"[TelnetConnection][guild={self.guild_id}] Conexão encerrada.")
 
     def handle_line(self, line: str):
         """
-        Processa as linhas de saída do servidor 7DTD.
-        Filtra e formata eventos de chat:
+        Processa as linhas de saída do servidor 7DTD e formata os eventos de chat.
         
-        • Mensagem de chat:
-          Ex.: Chat (from 'Steam_xxx', entity id '189', to 'Global'): 'Nome': Mensagem
-          → Formata como: 💬 **[CHAT] Nome**: Mensagem (com o prefixo [DC] colorido)
+        Eventos tratados:
+          - Mensagem de chat:
+            Ex.: Chat (from 'Steam_xxx', entity id '189', to 'Global'): 'Nome': Mensagem
+            → 💬 **[CHAT] {nome}**: {mensagem}
+          
+          - Morte:
+            GMSG: Player 'Nome' died
+            → 💀 **[CHAT] {nome}** morreu
+          
+          - Saída:
+            GMSG: Player 'Nome' left the game
+            → 🚪 **[CHAT] {nome}** saiu do jogo
+          
+          - Entrada:
+            GMSG: Player 'Nome' joined the game
+            ou RequestToEnterGame: .../Nome
+            → 🟢 **[CHAT] {nome}** entrou no jogo
         
-        • Morte:
-          Ex.: GMSG: Player 'Nome' died
-          → Formata como: 💀 **[CHAT] Nome** morreu
-        
-        • Saída:
-          Ex.: GMSG: Player 'Nome' left the game
-          → Formata como: 🚪 **[CHAT] Nome** saiu do jogo
-        
-        • Entrada:
-          Ex.: GMSG: Player 'Nome' joined the game
-               ou RequestToEnterGame: .../Nome
-          → Formata como: 🟢 **[CHAT] Nome** entrou no jogo
-        
-        Linhas que não corresponderem são ignoradas.
+        Linhas que não baterem com nenhum padrão são ignoradas.
         """
-        # Evita duplicação
         if self.last_line == line:
             return
         self.last_line = line
 
         formatted = None
 
-        # Padrões de regex para eventos
+        # Padrões de regex para os eventos
         chat_pattern = r"Chat \(from '([^']+)', entity id '([^']+)', to '([^']+)'\):\s*'([^']+)':\s*(.*)"
         death_pattern = r"GMSG: Player '([^']+)' died"
         left_pattern = r"GMSG: Player '([^']+)' left the game"
@@ -101,8 +108,8 @@ class TelnetConnection:
             if match:
                 name = match.group(4)
                 message = match.group(5)
-                # Formata com emoji de chat, nome em amarelo ([FFFF00]) e mensagem em ciano ([00FFFF])
-                formatted = f"💬 **[CHAT] {name}**: [00FFFF]{message}[-]"
+                # Mensagem de chat: sem cor no conteúdo, conforme solicitado
+                formatted = f"💬 **[CHAT] {name}**: {message}"
             else:
                 return
         elif "GMSG: Player" in line:
@@ -139,16 +146,12 @@ class TelnetConnection:
         else:
             return
 
-        # Adiciona o prefixo de Discord formatado: [DC] com cor 7289DA
-        if formatted:
-            formatted = f'[7289DA]DC[-] {formatted}'
-
+        # Para mensagens vindas do jogo, o prefixo não é necessário, mas se desejado pode ser adicionado.
+        # Neste exemplo, o formato solicitado já inclui o emoji e o [CHAT] em negrito.
         if self.channel_id and formatted:
             channel = self.bot.get_channel(int(self.channel_id))
             if channel:
-                asyncio.run_coroutine_threadsafe(
-                    channel.send(formatted), self.bot.loop
-                )
+                asyncio.run_coroutine_threadsafe(channel.send(formatted), self.bot.loop)
 
     def stop(self):
         """Para a thread e fecha a conexão."""
@@ -189,7 +192,7 @@ class SevenDaysCog(commands.Cog):
     - /7dtd_test
     - /7dtd_bloodmoon
     - /7dtd_players
-    E também escuta mensagens no canal configurado para enviar para o jogo.
+    E também encaminha mensagens do Discord para o jogo.
     """
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -386,8 +389,8 @@ class SevenDaysCog(commands.Cog):
     async def on_message(self, message: discord.Message):
         """
         Se a mensagem for enviada no canal configurado (via /7dtd_channel) neste servidor,
-        envia a mensagem para o jogo utilizando o comando 'say' com formatação de cores:
-          [7289DA]DC[-] [FFFF00]Nome do Autor[-]: [00FFFF]Mensagem[-]
+        envia a mensagem para o jogo utilizando o comando 'say' com a formatação:
+          say "[7289DA]DC[-] **{Nome do Autor}**: [00FFFF]{Mensagem}[-]"
         """
         if message.author.bot or not message.guild:
             return
@@ -395,13 +398,10 @@ class SevenDaysCog(commands.Cog):
         guild_id = str(message.guild.id)
         if guild_id in active_connections:
             conn = active_connections[guild_id]
-            # Verifica se a mensagem foi enviada no canal configurado
             if conn.channel_id and message.channel.id == int(conn.channel_id):
-                # Evita enviar comandos (opcional, se a mensagem começar com o prefixo do bot)
                 if message.content.startswith("!"):
                     return
-                # Formata a mensagem para o jogo
-                formatted_msg = f'say "[7289DA]DC[-] [FFFF00]{message.author.display_name}[-]: [00FFFF]{message.content}[-]"'
+                formatted_msg = f'say "[7289DA]DC[-] **{message.author.display_name}**: [00FFFF]{message.content}[-]"'
                 try:
                     await conn.send_command(formatted_msg, wait_prompt=False)
                 except Exception as e:
