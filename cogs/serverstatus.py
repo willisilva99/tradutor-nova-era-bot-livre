@@ -25,12 +25,16 @@ async def get_message(channel: discord.TextChannel, message_id: int):
 class ServerStatusCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Armazena o último status (True=Online, False=Offline) para alertas de mudança, se necessário.
+        # Guarda o status anterior para alertas de mudança, se necessário
         self.last_status = {}
+        self.status_task.start()
+
+    def cog_unload(self):
+        self.status_task.cancel()
 
     async def fetch_embed(self, server_key: str) -> discord.Embed:
         """
-        Consulta a API do 7DTD para obter os dados do servidor e constrói um embed com informações formatadas.
+        Consulta a API do 7DTD para obter os dados do servidor e constrói um embed formatado.
         Em caso de erro, retorna um embed de erro.
         """
         headers = {"Accept": "application/json"}
@@ -79,19 +83,18 @@ class ServerStatusCog(commands.Cog):
         port = detail_data.get("port", "N/A")
         online_status = detail_data.get("is_online", "0") == "1"
         
-        # Emoji e status
         status_emoji = "🟢" if online_status else "🔴"
         status_text = "Online" if online_status else "Offline"
         now = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
 
-        # Votos
+        # Processa votos
         votes_array = votes_data if isinstance(votes_data, list) else votes_data.get("votes", [])
         total_votes = len(votes_array)
         voters_list = voters_data if isinstance(voters_data, list) else voters_data.get("voters", [])
         top3 = sorted(voters_list, key=lambda v: int(v.get("votes", 0)), reverse=True)[:3]
         top3_str = ", ".join(f"{v.get('nickname', 'N/A')} ({v.get('votes', 0)})" for v in top3) if top3 else "N/A"
 
-        # Criação do embed com espaçamentos e emojis para tornar a leitura mais agradável
+        # Cria o embed com formatação aprimorada e espaçamentos
         embed = discord.Embed(
             title=f"{status_emoji} {server_name} - Status",
             color=discord.Color.green() if online_status else discord.Color.red()
@@ -112,8 +115,8 @@ class ServerStatusCog(commands.Cog):
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
         """
-        Quando alguém reagir com "🔄" em uma mensagem de status, o bot removerá essa reação,
-        deletará a mensagem e enviará uma nova com dados atualizados.
+        Quando alguém reage com "🔄" na mensagem de status, o bot remove essa reação,
+        deleta a mensagem e reenvia o embed atualizado.
         """
         if user.bot:
             return
@@ -121,14 +124,14 @@ class ServerStatusCog(commands.Cog):
             return
 
         message = reaction.message
-        # Verifica se a mensagem está registrada no banco (config de status)
+
+        # Verifica se a mensagem está registrada no banco
         with SessionLocal() as session:
             config = session.query(ServerStatusConfig).filter_by(message_id=str(message.id)).first()
         if not config:
             return  # Não é uma mensagem de status registrada
 
         try:
-            # Remove a reação do usuário para limpar o gatilho
             await message.remove_reaction("🔄", user)
         except Exception as e:
             print(f"[ERROR] Ao remover reação: {repr(e)}")
@@ -140,25 +143,32 @@ class ServerStatusCog(commands.Cog):
         except Exception as e:
             print(f"[ERROR] Ao deletar mensagem: {repr(e)}")
         new_msg = await channel.send(embed=new_embed)
+        try:
+            await new_msg.add_reaction("🔄")
+        except Exception as e:
+            print(f"[ERROR] Ao adicionar reação à nova mensagem: {repr(e)}")
         with SessionLocal() as session:
             conf = session.query(ServerStatusConfig).filter_by(guild_id=str(message.guild.id)).first()
             if conf:
                 conf.message_id = str(new_msg.id)
                 session.commit()
-        # Opcional: envie uma confirmação no canal (ou use log)
         await channel.send("✅ Status atualizado!")
 
     @app_commands.command(name="serverstatus_config", description="Configura o status do servidor 7DTD (atualiza por reação).")
     async def serverstatus_config(self, interaction: discord.Interaction, server_key: str, canal: discord.TextChannel):
         """
         Configura o status do servidor:
-          - Consulta a API, envia o embed inicial no canal especificado.
+          - Consulta a API e envia o embed inicial no canal especificado.
           - Salva a ServerKey, o canal e o ID da mensagem enviada no banco.
         """
         try:
             await interaction.response.defer(thinking=True, ephemeral=True)
             embed = await asyncio.wait_for(self.fetch_embed(server_key), timeout=10)
             msg = await canal.send(embed=embed)
+            try:
+                await msg.add_reaction("🔄")
+            except Exception as e:
+                print(f"[ERROR] Ao adicionar reação à mensagem: {repr(e)}")
             with SessionLocal() as session:
                 config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild.id)).first()
                 if not config:
@@ -177,7 +187,8 @@ class ServerStatusCog(commands.Cog):
     async def serverstatus_show(self, interaction: discord.Interaction):
         """
         Exibe o status do servidor imediatamente.
-        Se a mensagem estiver configurada, envia o embed atual; caso contrário, informa que não há configuração.
+        Se a mensagem de status estiver configurada, envia o embed atual;
+        caso contrário, informa que não há configuração.
         """
         try:
             await interaction.response.defer(thinking=True, ephemeral=False)
@@ -193,6 +204,10 @@ class ServerStatusCog(commands.Cog):
             except NotFound as nf:
                 print(f"[LOG] Mensagem não encontrada: {repr(nf)}")
                 msg = await channel.send(embed=embed)
+                try:
+                    await msg.add_reaction("🔄")
+                except Exception as e:
+                    print(f"[ERROR] Ao adicionar reação à nova mensagem: {repr(e)}")
                 with SessionLocal() as session:
                     conf = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild.id)).first()
                     conf.message_id = str(msg.id)
@@ -207,7 +222,7 @@ class ServerStatusCog(commands.Cog):
         """
         Remove a configuração de status:
           - Tenta deletar a mensagem de status (se existir).
-          - Remove a configuração do banco.
+          - Remove a configuração do banco de dados.
         """
         try:
             await interaction.response.defer(thinking=True, ephemeral=True)
