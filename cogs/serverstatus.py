@@ -25,7 +25,7 @@ async def get_message(channel: discord.TextChannel, message_id: int):
 class ServerStatusCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Armazena o status (online/offline) anterior para enviar alertas de mudança
+        # Armazena o último status para alertas de mudança
         self.last_status = {}
         self.status_task.start()
 
@@ -35,7 +35,7 @@ class ServerStatusCog(commands.Cog):
     async def fetch_embed(self, server_key: str) -> discord.Embed:
         """
         Consulta a API do 7DTD para obter os dados do servidor e constrói um embed.
-        Caso ocorra algum erro na consulta, retorna um embed de erro.
+        Em caso de erro, retorna um embed de erro.
         """
         headers = {"Accept": "application/json"}
         detail_url = f"https://7daystodie-servers.com/api/?object=servers&element=detail&key={server_key}&format=json"
@@ -43,11 +43,16 @@ class ServerStatusCog(commands.Cog):
         voters_url = f"https://7daystodie-servers.com/api/?object=servers&element=voters&key={server_key}&month=current&format=json"
         try:
             async with aiohttp.ClientSession() as session:
-                async with asyncio.wait_for(session.get(detail_url, headers=headers), timeout=10) as resp:
-                    detail_data = await resp.json(content_type=None)
-                async with asyncio.wait_for(session.get(votes_url, headers=headers), timeout=10) as resp_votes:
+                resp_detail = await asyncio.wait_for(session.get(detail_url, headers=headers), timeout=10)
+                async with resp_detail:
+                    detail_data = await resp_detail.json(content_type=None)
+                
+                resp_votes = await asyncio.wait_for(session.get(votes_url, headers=headers), timeout=10)
+                async with resp_votes:
                     votes_data = await resp_votes.json(content_type=None)
-                async with asyncio.wait_for(session.get(voters_url, headers=headers), timeout=10) as resp_voters:
+                
+                resp_voters = await asyncio.wait_for(session.get(voters_url, headers=headers), timeout=10)
+                async with resp_voters:
                     voters_data = await resp_voters.json(content_type=None)
         except Exception as e:
             embed = discord.Embed(
@@ -65,6 +70,7 @@ class ServerStatusCog(commands.Cog):
             )
             return embed
 
+        # Extrai os dados do servidor
         server_version = detail_data.get("version", "N/A")
         server_name = detail_data.get("name", "N/A")
         hostname = detail_data.get("hostname", "N/A")
@@ -80,7 +86,7 @@ class ServerStatusCog(commands.Cog):
         status_text = "Online" if online_status else "Offline"
         now = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
 
-        # Processa votos
+        # Processa votos e votantes
         votes_array = votes_data if isinstance(votes_data, list) else votes_data.get("votes", [])
         total_votes = len(votes_array)
         voters_list = voters_data if isinstance(voters_data, list) else voters_data.get("voters", [])
@@ -132,7 +138,7 @@ class ServerStatusCog(commands.Cog):
             except Exception as e:
                 print(f"[ERROR] Erro ao editar mensagem de status para guild {config.guild_id}: {repr(e)}")
             
-            # Verifica mudança de status para enviar alertas
+            # Verifica mudança de status para alertas
             online = (embed.color.value == discord.Color.green().value)
             if config.guild_id in self.last_status:
                 if self.last_status[config.guild_id] and not online:
@@ -170,7 +176,8 @@ class ServerStatusCog(commands.Cog):
     async def serverstatus_show(self, interaction: discord.Interaction):
         """
         Exibe o status do servidor imediatamente.
-        Se a mensagem de status estiver configurada, envia o embed atual; caso contrário, indica que não há configuração.
+        Se a mensagem de status estiver configurada, envia o embed atual;
+        caso contrário, indica que não há configuração.
         """
         try:
             await interaction.response.defer(thinking=True, ephemeral=False)
@@ -182,7 +189,6 @@ class ServerStatusCog(commands.Cog):
             embed = await self.fetch_embed(config.server_key)
             channel = interaction.channel
             try:
-                # Tenta buscar a mensagem registrada
                 msg = await get_message(channel, int(config.message_id))
             except NotFound as nf:
                 print(f"[LOG] Mensagem não encontrada para guild {config.guild_id}: {repr(nf)}")
