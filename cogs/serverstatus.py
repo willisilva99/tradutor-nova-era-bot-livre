@@ -126,9 +126,3 @@ class ServerStatusCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ServerStatusCog(bot))
-
-# Sincronizar comandos corretamente no on_ready
-@bot.event
-async def on_ready():
-    await bot.tree.sync()
-    print("✅ Comandos de Slash sincronizados!")
