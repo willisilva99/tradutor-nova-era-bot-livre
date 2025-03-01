@@ -29,14 +29,14 @@ class ServerStatusCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.ultimo_status_online = {}
-        self.status_task.start()
+        self.status_task.start()  # Inicia a tarefa de atualização
 
     def cog_unload(self):
         self.status_task.cancel()
 
-    @tasks.loop(minutes=10)
+    @tasks.loop(minutes=5)  # Atualiza a cada 5 minutos
     async def status_task(self):
-        """Atualiza o status dos servidores a cada 10 minutos."""
+        """Atualiza o status dos servidores a cada 5 minutos."""
         with SessionLocal() as session:
             configs = session.query(ServerStatusConfig).all()
         for config in configs:
@@ -44,19 +44,17 @@ class ServerStatusCog(commands.Cog):
             channel = self.bot.get_channel(int(config.channel_id))
             if channel:
                 try:
+                    # Tenta buscar a mensagem existente para editar
                     msg = await channel.fetch_message(int(config.message_id))
                     await msg.edit(embed=embed, view=view)
                     
-                    # Comparação utilizando o valor numérico da cor
+                    # Verifica mudança de status comparando o valor numérico da cor
                     online = (embed.color.value == discord.Color.green().value)
-                    
-                    # Envio de alertas caso haja mudança de status
                     if config.guild_id in self.ultimo_status_online:
                         if self.ultimo_status_online[config.guild_id] and not online:
                             await channel.send("🔴 **Alerta:** O servidor está **OFFLINE**!")
                         elif not self.ultimo_status_online[config.guild_id] and online:
                             await channel.send("🟢 **O servidor voltou a ficar ONLINE!**")
-                    
                     self.ultimo_status_online[config.guild_id] = online
                 except Exception as e:
                     print(f"Erro ao editar mensagem de status para guild {config.guild_id}: {e}")
@@ -146,11 +144,12 @@ class ServerStatusCog(commands.Cog):
     async def serverstatus_config(self, interaction: discord.Interaction, server_key: str, canal: discord.TextChannel):
         """
         Comando para configurar o status do servidor:
-          - Salva a ServerKey e o canal onde a mensagem de status será postada.
-          - Envia uma mensagem inicial que será editada automaticamente.
+          - Consulta a API e envia o embed inicial no canal especificado.
+          - Salva a ServerKey, o canal e o ID da mensagem enviada.
         """
         await interaction.response.defer(thinking=True, ephemeral=True)
-        msg = await canal.send("⏳ Configurando status do servidor...")
+        embed, view = await self.fetch_status_embed(server_key)
+        msg = await canal.send(embed=embed, view=view)  # Envia o embed inicial e captura o ID da mensagem
         with SessionLocal() as session:
             config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild_id)).first()
             if not config:
@@ -161,6 +160,37 @@ class ServerStatusCog(commands.Cog):
             config.message_id = str(msg.id)
             session.commit()
         await interaction.followup.send("✅ Configuração salva! O status será atualizado automaticamente.", ephemeral=True)
+
+    @app_commands.command(name="serverstatus_show", description="Exibe o status do servidor 7DTD imediatamente.")
+    async def serverstatus_show(self, interaction: discord.Interaction):
+        """
+        Comando para exibir o status do servidor imediatamente.
+        Caso o ID da mensagem não exista (por exemplo, se a mensagem foi apagada), envia uma nova mensagem
+        e atualiza o registro no banco de dados.
+        """
+        await interaction.response.defer(thinking=True, ephemeral=False)
+        with SessionLocal() as session:
+            config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild_id)).first()
+        if not config:
+            await interaction.followup.send("Nenhuma configuração encontrada. Use /serverstatus_config para configurar.")
+            return
+
+        embed, view = await self.fetch_status_embed(config.server_key)
+        channel = interaction.channel
+
+        # Tenta buscar a mensagem de status já registrada
+        try:
+            msg = await channel.fetch_message(int(config.message_id))
+        except Exception as e:
+            print(f"Não foi possível buscar a mensagem registrada: {e}")
+            msg = await channel.send(embed=embed, view=view)
+            # Atualiza o ID da mensagem no banco de dados
+            with SessionLocal() as session:
+                config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild_id)).first()
+                config.message_id = str(msg.id)
+                session.commit()
+
+        await interaction.followup.send(embed=embed, view=view)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ServerStatusCog(bot))
