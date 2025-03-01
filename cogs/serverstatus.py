@@ -6,12 +6,11 @@ import asyncio
 import aiohttp
 import time
 
-from db import SessionLocal, ServerStatusConfig  # Certifique-se de que ServerStatusConfig está definido no db.py
+from db import SessionLocal, ServerStatusConfig  # Certifique-se de que ServerStatusConfig está definido no seu db.py
 
 class ServerStatusCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Inicia a task de atualização automática (a cada 10 minutos)
         self.status_task.start()
 
     def cog_unload(self):
@@ -35,33 +34,27 @@ class ServerStatusCog(commands.Cog):
     async def fetch_status_embed(self, server_key: str) -> discord.Embed:
         """
         Consulta as APIs do 7DTD e constrói um embed com:
-          - Nome do servidor, IP, Porta, status (online/offline)
+          - Detalhes do servidor (nome, ip, porta, status online/offline, jogadores online)
           - Total de votos
           - Top 3 votantes
-        Caso não seja possível obter IP/porta, exibe um embed de erro.
         """
         detail_url = f"https://7daystodie-servers.com/api/?object=servers&element=detail&key={server_key}&format=json"
         votes_url = f"https://7daystodie-servers.com/api/?object=servers&element=votes&key={server_key}&format=json"
-        voters_url = f"https://7daystodie-servers.com/api/?object=servers&element=voters&key={server_key}&month=all&format=json"
+        voters_url = f"https://7daystodie-servers.com/api/?object=servers&element=voters&key={server_key}&month=current&format=json"
         
         async with aiohttp.ClientSession() as session:
-            # Tenta obter dados do detail
             try:
                 async with session.get(detail_url) as r:
                     detail_data = await r.json()
             except Exception as e:
                 detail_data = {}
                 print(f"Erro na consulta detail: {e}")
-
-            # Tenta obter dados de votos
             try:
                 async with session.get(votes_url) as r:
                     votes_data = await r.json()
             except Exception as e:
                 votes_data = {}
                 print(f"Erro na consulta votes: {e}")
-
-            # Tenta obter dados de votantes
             try:
                 async with session.get(voters_url) as r:
                     voters_data = await r.json()
@@ -69,16 +62,15 @@ class ServerStatusCog(commands.Cog):
                 voters_data = {}
                 print(f"Erro na consulta voters: {e}")
 
-        # Se detail_data estiver vazio, exibimos um embed de erro
+        # Se não conseguiu retornar dados do detail, exibe embed de erro
         if not detail_data:
-            embed = discord.Embed(
+            return discord.Embed(
                 title="Erro ao obter dados do servidor",
                 description="A API não retornou informações. Verifique a chave e tente novamente.",
                 color=discord.Color.red()
             )
-            return embed
 
-        # Extraia dados do detail_data
+        # Extração dos dados – ajuste conforme a estrutura real da API
         server_name = detail_data.get("serverName", "N/A")
         ip = detail_data.get("ip", "N/A")
         port = detail_data.get("port", "N/A")
@@ -87,46 +79,20 @@ class ServerStatusCog(commands.Cog):
         online_status = detail_data.get("online", True)
         status_text = "Online" if online_status else "Offline"
 
-        # Verifica se ip e port são válidos
-        if ip == "N/A" or port == "N/A":
-            error_embed = discord.Embed(
-                title="Erro ao obter IP/porta do servidor",
-                description="A API não retornou IP ou porta válidos. Verifique a chave do servidor e tente novamente.",
-                color=discord.Color.red()
-            )
-            return error_embed
-
-        # Tenta converter a porta em inteiro, caso queira uma verificação extra
-        try:
-            port_int = int(port)
-        except ValueError:
-            error_embed = discord.Embed(
-                title="Porta inválida",
-                description=f"O valor de porta retornado foi `{port}`, que não é um número. Verifique a API.",
-                color=discord.Color.red()
-            )
-            return error_embed
-
-        # Pega total de votos
         total_votes = votes_data.get("totalVotes", "N/A")
 
-        # Processa votantes
+        # Processa a lista de votantes para pegar os top 3
         voters_list = voters_data.get("voters", [])
         voters_sorted = sorted(voters_list, key=lambda v: v.get("votes", 0), reverse=True)
         top3 = voters_sorted[:3]
-        top3_str = (
-            ", ".join(f'{v.get("username", "N/A")} ({v.get("votes", 0)})' for v in top3)
-            if top3 else
-            "N/A"
-        )
+        top3_str = ", ".join(f'{v.get("username", "N/A")} ({v.get("votes", 0)})' for v in top3) if top3 else "N/A"
 
-        # Monta o embed final
         embed = discord.Embed(
             title=f"Status do Servidor: {server_name}",
             color=discord.Color.dark_green() if online_status else discord.Color.red()
         )
         embed.add_field(name="Status", value=status_text, inline=True)
-        embed.add_field(name="IP:Porta", value=f"{ip}:{port_int}", inline=True)
+        embed.add_field(name="IP:Porta", value=f"{ip}:{port}", inline=True)
         embed.add_field(name="Jogadores Online", value=f"{players}/{max_players}", inline=True)
         embed.add_field(name="Total de Votos", value=total_votes, inline=True)
         embed.add_field(name="Top 3 Votantes", value=top3_str, inline=False)
