@@ -6,7 +6,7 @@ import asyncio
 import aiohttp
 import time
 
-from db import SessionLocal, ServerStatusConfig  # Certifique-se de que ServerStatusConfig está definido no seu db.py
+from db import SessionLocal, ServerStatusConfig  # Certifique-se de que ServerStatusConfig está definido no db.py
 
 class ServerStatusCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -34,35 +34,58 @@ class ServerStatusCog(commands.Cog):
     async def fetch_status_embed(self, server_key: str) -> discord.Embed:
         """
         Consulta as APIs do 7DTD e constrói um embed com:
-          - Detalhes do servidor (nome, ip, porta, status online/offline, jogadores online)
+          - Detalhes do servidor (nome, IP, porta, status online/offline, jogadores online)
           - Total de votos
           - Top 3 votantes
+        Caso não seja possível obter os dados, retorna um embed de erro.
         """
+        headers = {"Accept": "application/json"}
         detail_url = f"https://7daystodie-servers.com/api/?object=servers&element=detail&key={server_key}&format=json"
         votes_url = f"https://7daystodie-servers.com/api/?object=servers&element=votes&key={server_key}&format=json"
         voters_url = f"https://7daystodie-servers.com/api/?object=servers&element=voters&key={server_key}&month=current&format=json"
         
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(detail_url) as r:
+                async with session.get(detail_url, headers=headers) as r:
+                    if "application/json" not in r.headers.get("Content-Type", ""):
+                        text = await r.text()
+                        raise Exception(f"Resposta inesperada (detail): {text}")
                     detail_data = await r.json()
             except Exception as e:
-                detail_data = {}
                 print(f"Erro na consulta detail: {e}")
+                return discord.Embed(
+                    title="Erro ao obter dados do servidor",
+                    description=f"Detail: {e}",
+                    color=discord.Color.red()
+                )
             try:
-                async with session.get(votes_url) as r:
+                async with session.get(votes_url, headers=headers) as r:
+                    if "application/json" not in r.headers.get("Content-Type", ""):
+                        text = await r.text()
+                        raise Exception(f"Resposta inesperada (votes): {text}")
                     votes_data = await r.json()
             except Exception as e:
-                votes_data = {}
                 print(f"Erro na consulta votes: {e}")
+                return discord.Embed(
+                    title="Erro ao obter dados de votos",
+                    description=f"Votes: {e}",
+                    color=discord.Color.red()
+                )
             try:
-                async with session.get(voters_url) as r:
+                async with session.get(voters_url, headers=headers) as r:
+                    if "application/json" not in r.headers.get("Content-Type", ""):
+                        text = await r.text()
+                        raise Exception(f"Resposta inesperada (voters): {text}")
                     voters_data = await r.json()
             except Exception as e:
-                voters_data = {}
                 print(f"Erro na consulta voters: {e}")
+                return discord.Embed(
+                    title="Erro ao obter dados de votantes",
+                    description=f"Voters: {e}",
+                    color=discord.Color.red()
+                )
 
-        # Se não conseguiu retornar dados do detail, exibe embed de erro
+        # Se detail_data estiver vazio, exibe embed de erro
         if not detail_data:
             return discord.Embed(
                 title="Erro ao obter dados do servidor",
