@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
+from discord.errors import NotFound
 from sqlalchemy.orm import Session
 import asyncio
 import aiohttp
@@ -25,6 +26,20 @@ class Cache:
 
 status_cache = Cache(ttl=60)
 
+async def get_message(channel: discord.TextChannel, message_id: int):
+    """
+    Tenta recuperar a mensagem via fetch_message.
+    Se não encontrar, procura no histórico do canal.
+    """
+    try:
+        return await channel.fetch_message(message_id)
+    except NotFound:
+        # Procura no histórico do canal
+        async for msg in channel.history(limit=100):
+            if msg.id == message_id:
+                return msg
+        raise NotFound(f"Mensagem {message_id} não encontrada no histórico.")
+
 class ServerStatusCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -44,24 +59,24 @@ class ServerStatusCog(commands.Cog):
             channel = self.bot.get_channel(int(config.channel_id))
             if channel:
                 try:
-                    msg = await channel.fetch_message(int(config.message_id))
+                    msg = await get_message(channel, int(config.message_id))
                     await msg.edit(embed=embed, view=view)
+                except NotFound as nf:
+                    print(f"[LOG] Mensagem não encontrada para guild {config.guild_id}: {nf}")
+                    try:
+                        msg = await channel.send(embed=embed, view=view)
+                        with SessionLocal() as session:
+                            cfg = session.query(ServerStatusConfig).filter_by(guild_id=str(config.guild_id)).first()
+                            if cfg:
+                                cfg.message_id = str(msg.id)
+                                session.commit()
+                        print(f"[LOG] Nova mensagem de status criada para guild {config.guild_id}")
+                    except Exception as e2:
+                        print(f"[ERROR] Erro ao criar nova mensagem para guild {config.guild_id}: {e2}")
                 except Exception as e:
-                    error_str = str(e)
-                    print(f"Erro ao editar mensagem de status para guild {config.guild_id}: {error_str}")
-                    # Se a mensagem não for encontrada, cria uma nova e atualiza o DB
-                    if "Unknown Message" in error_str or "10008" in error_str:
-                        try:
-                            msg = await channel.send(embed=embed, view=view)
-                            with SessionLocal() as session:
-                                cfg = session.query(ServerStatusConfig).filter_by(guild_id=str(config.guild_id)).first()
-                                if cfg:
-                                    cfg.message_id = str(msg.id)
-                                    session.commit()
-                            print(f"Nova mensagem de status criada para guild {config.guild_id}")
-                        except Exception as e2:
-                            print(f"Erro ao criar nova mensagem para guild {config.guild_id}: {e2}")
-                # Verifica a mudança de status e envia alertas
+                    print(f"[ERROR] Erro ao editar mensagem de status para guild {config.guild_id}: {e}")
+                
+                # Envio de alertas de mudança de status
                 online = (embed.color.value == discord.Color.green().value)
                 if config.guild_id in self.ultimo_status_online:
                     if self.ultimo_status_online[config.guild_id] and not online:
@@ -78,7 +93,6 @@ class ServerStatusCog(commands.Cog):
         Retorna um embed formatado e os botões.
         Utiliza cache para reduzir requisições repetidas.
         """
-        # Retorna o cache se existir
         if (cached := status_cache.get(server_key)):
             return cached
         
@@ -89,30 +103,21 @@ class ServerStatusCog(commands.Cog):
         
         try:
             async with aiohttp.ClientSession() as session:
-                # Consulta de detalhes do servidor
                 response = await asyncio.wait_for(session.get(detail_url, headers=headers), timeout=10)
                 async with response:
                     detail_data = await response.json(content_type=None)
                 
-                # Consulta total de votos
                 response_votes = await asyncio.wait_for(session.get(votes_url, headers=headers), timeout=10)
                 async with response_votes:
                     votes_data = await response_votes.json(content_type=None)
-                if isinstance(votes_data, list):
-                    votes_array = votes_data
-                else:
-                    votes_array = votes_data.get("votes", [])
+                votes_array = votes_data if isinstance(votes_data, list) else votes_data.get("votes", [])
                 
-                # Consulta dos votantes
                 response_voters = await asyncio.wait_for(session.get(voters_url, headers=headers), timeout=10)
                 async with response_voters:
                     voters_data = await response_voters.json(content_type=None)
-                if isinstance(voters_data, list):
-                    voters_list = voters_data
-                else:
-                    voters_list = voters_data.get("voters", [])
+                voters_list = voters_data if isinstance(voters_data, list) else voters_data.get("voters", [])
         except Exception as e:
-            print(f"Erro na consulta da API (detail/votes/voters): {e}")
+            print(f"[ERROR] Erro na consulta da API (detail/votes/voters): {e}")
             erro_embed = discord.Embed(
                 title="Erro ao obter dados do servidor", 
                 description=f"{e}", 
@@ -128,7 +133,6 @@ class ServerStatusCog(commands.Cog):
             )
             return erro_embed, discord.ui.View()
         
-        # Extração dos dados do servidor
         server_version = detail_data.get("version", "N/A")
         server_name = detail_data.get("name", "N/A")
         hostname = detail_data.get("hostname", "N/A")
@@ -141,13 +145,11 @@ class ServerStatusCog(commands.Cog):
         port = detail_data.get("port", "N/A")
         online_status = detail_data.get("is_online", "0") == "1"
         
-        # Definindo status e formatação
         status_emoji = "🟢" if online_status else "🔴"
         status_text = "Online" if online_status else "Offline"
         color = discord.Color.green() if online_status else discord.Color.red()
         now = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
         
-        # Cálculo de votos e top 3 votantes
         total_votes = len(votes_array)
         top3 = sorted(voters_list, key=lambda v: int(v.get("votes", 0)), reverse=True)[:3]
         top3_str = ", ".join(f"{v.get('nickname', 'N/A')} ({v.get('votes', 0)})" for v in top3) if top3 else "N/A"
@@ -168,21 +170,18 @@ class ServerStatusCog(commands.Cog):
         embed.add_field(name="🏆 Top 3 Votantes", value=top3_str, inline=False)
         embed.set_footer(text=f"Atualizado em: {now} | Atualiza a cada 5 minutos")
         
-        # Extrai o ID numérico do servidor, se disponível
         server_id = detail_data.get("id", None)
         if server_id is not None:
             vote_url = f"https://7daystodie-servers.com/server/{server_id}/"
         else:
             vote_url = f"https://7daystodie-servers.com/server/{server_key}"
         
-        # Criação dos botões (apenas URLs HTTP)
         view = discord.ui.View()
         view.add_item(discord.ui.Button(
             label="🌐 Votar no Servidor",
             url=vote_url,
             style=discord.ButtonStyle.link
         ))
-        # Se desejar adicionar outro botão, certifique-se de usar URL http/https
         
         status_cache.set(server_key, (embed, view))
         return embed, view
@@ -209,7 +208,7 @@ class ServerStatusCog(commands.Cog):
                 session.commit()
             await interaction.followup.send("✅ Configuração salva! O status será atualizado automaticamente.", ephemeral=True)
         except Exception as e:
-            print("Erro no comando serverstatus_config:", e)
+            print("[ERROR] Erro no comando serverstatus_config:", e)
             await interaction.followup.send(f"❌ Ocorreu um erro: {e}", ephemeral=True)
 
     @app_commands.command(name="serverstatus_show", description="Exibe o status do servidor 7DTD imediatamente.")
@@ -229,9 +228,9 @@ class ServerStatusCog(commands.Cog):
             embed, view = await self.fetch_status_embed(config.server_key)
             channel = interaction.channel
             try:
-                msg = await channel.fetch_message(int(config.message_id))
-            except Exception as e:
-                print(f"Não foi possível buscar a mensagem registrada: {e}")
+                msg = await get_message(channel, int(config.message_id))
+            except NotFound as nf:
+                print(f"[LOG] Não foi possível buscar a mensagem registrada: {nf}")
                 msg = await channel.send(embed=embed, view=view)
                 with SessionLocal() as session:
                     config = session.query(ServerStatusConfig).filter_by(guild_id=str(interaction.guild.id)).first()
@@ -240,7 +239,7 @@ class ServerStatusCog(commands.Cog):
 
             await interaction.followup.send(embed=embed, view=view)
         except Exception as e:
-            print("Erro no comando serverstatus_show:", e)
+            print("[ERROR] Erro no comando serverstatus_show:", e)
             await interaction.followup.send(f"❌ Ocorreu um erro: {e}", ephemeral=True)
 
     @app_commands.command(name="serverstatus_remove", description="Remove a configuração de status do servidor 7DTD.")
@@ -263,12 +262,12 @@ class ServerStatusCog(commands.Cog):
                         msg = await channel.fetch_message(int(config.message_id))
                         await msg.delete()
                     except Exception as e:
-                        print(f"Não foi possível deletar a mensagem: {e}")
+                        print(f"[ERROR] Não foi possível deletar a mensagem: {e}")
                 session.delete(config)
                 session.commit()
             await interaction.followup.send("✅ Configuração removida e mensagem deletada (se encontrada).", ephemeral=True)
         except Exception as e:
-            print("Erro no comando serverstatus_remove:", e)
+            print("[ERROR] Erro no comando serverstatus_remove:", e)
             await interaction.followup.send(f"❌ Ocorreu um erro: {e}", ephemeral=True)
 
 async def setup(bot: commands.Bot):
