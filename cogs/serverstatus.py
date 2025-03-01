@@ -6,38 +6,13 @@ import asyncio
 import aiohttp
 import time
 
-from db import SessionLocal, ServerStatusConfig  # Certifique-se de que ServerStatusConfig está definido no seu db.py
-
-class ServerStatusCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        self.status_task.start()
-
-    def cog_unload(self):
-        self.status_task.cancel()
-
-    @tasks.loop(minutes=10)
-    async def status_task(self):
-        """Atualiza o status de todos os servidores a cada 10 minutos."""
-        with SessionLocal() as session:
-            configs = session.query(ServerStatusConfig).all()
-        for config in configs:
-            embed = await self.fetch_status_embed(config.server_key)
-            channel = self.bot.get_channel(int(config.channel_id))
-            if channel:
-                try:
-                    msg = await channel.fetch_message(int(config.message_id))
-                    await msg.edit(embed=embed)
-                except Exception as e:
-                    print(f"Erro ao editar mensagem de status para guild {config.guild_id}: {e}")
-
     async def fetch_status_embed(self, server_key: str) -> discord.Embed:
         """
         Consulta as APIs do 7DTD e constrói um embed com:
-          - Detalhes do servidor (nome, IP, porta, status online/offline, jogadores online)
+          - Detalhes do servidor (nome, IP, porta, status e jogadores online)
           - Total de votos
           - Top 3 votantes
-        Se ocorrer erro, retorna um embed de erro.
+        Caso a API não retorne informações adequadas, exibe um embed de erro.
         """
         headers = {"Accept": "application/json"}
         detail_url = f"https://7daystodie-servers.com/api/?object=servers&element=detail&key={server_key}&format=json"
@@ -47,7 +22,6 @@ class ServerStatusCog(commands.Cog):
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(detail_url, headers=headers) as r:
-                    # Permite converter mesmo se o content-type não for exatamente application/json
                     detail_data = await r.json(content_type=None)
             except Exception as e:
                 print(f"Erro na consulta detail: {e}")
@@ -77,6 +51,7 @@ class ServerStatusCog(commands.Cog):
                     color=discord.Color.red()
                 )
 
+        # Verifica se o detail_data retornou algo
         if not detail_data:
             return discord.Embed(
                 title="Erro ao obter dados do servidor",
@@ -84,22 +59,25 @@ class ServerStatusCog(commands.Cog):
                 color=discord.Color.red()
             )
 
-        # Extração dos dados – ajuste conforme a estrutura real da API
-        server_name = detail_data.get("serverName", "N/A")
+        # Extração dos dados usando os campos da resposta da API
+        server_name = detail_data.get("name", "N/A")
         ip = detail_data.get("address", "N/A")
         port = detail_data.get("port", "N/A")
-        players = detail_data.get("players", 0)
-        max_players = detail_data.get("maxplayers", 0)
-        online_status = detail_data.get("is_online", "0") == "1"
+        # Jogadores online não está disponível na resposta, então usamos "N/A"
+        players = "N/A"
+        max_players = "N/A"
+        # Se não houver informação de status, assumimos online
+        online_status = True
         status_text = "Online" if online_status else "Offline"
 
-        total_votes = votes_data.get("votes", "N/A")
-
-        voters_list = voters_data.get("voters", [])
-        voters_sorted = sorted(voters_list, key=lambda v: v.get("votes", 0), reverse=True)
-        top3 = voters_sorted[:3]
+        # Para votos: usamos o endpoint de votos que retorna um array em "votes"
+        votes_array = votes_data.get("votes", [])
+        total_votes = len(votes_array)
+        
+        # Para os top 3 votantes, ordenamos por "timestamp" (descendente)
+        top3 = sorted(votes_array, key=lambda v: int(v.get("timestamp", 0)), reverse=True)[:3]
         top3_str = (
-            ", ".join(f'{v.get("username", "N/A")} ({v.get("votes", 0)})' for v in top3)
+            ", ".join(f'{v.get("nickname", "N/A")} (Claimed: {v.get("claimed", "0")})' for v in top3)
             if top3 else "N/A"
         )
 
@@ -114,6 +92,7 @@ class ServerStatusCog(commands.Cog):
         embed.add_field(name="Top 3 Votantes", value=top3_str, inline=False)
         embed.set_footer(text="Atualizado em " + time.strftime("%d/%m/%Y %H:%M:%S"))
         return embed
+
 
     @app_commands.command(name="serverstatus_config", description="Configura o status do servidor 7DTD para atualização automática.")
     async def serverstatus_config(self, interaction: discord.Interaction, server_key: str, canal: discord.TextChannel):
