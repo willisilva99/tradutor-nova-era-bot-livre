@@ -25,7 +25,6 @@ Base = declarative_base()
 # ======================
 # MODELOS (TABELAS)
 # ======================
-
 class TicketUserData(Base):
     __tablename__ = "ticket_user_data"
     user_id = Column(String, primary_key=True, index=True)
@@ -46,16 +45,16 @@ class BlacklistedUser(Base):
 
 Base.metadata.create_all(engine, checkfirst=True)
 
-# ===================================
-# FUNÇÃO DE CHECK: ADMIN OU OWNER
-# ===================================
-def is_admin_or_owner(interaction: discord.Interaction) -> bool:
+# =========================
+# FUNÇÃO GLOBAL DE CHECAGEM
+# =========================
+async def admin_or_owner_check(interaction: discord.Interaction) -> bool:
     """
-    Retorna True se o usuário for administrador ou dono do servidor.
+    Retorna True se o usuário for dono do servidor ou tiver permissão de administrador.
+    Caso contrário, False.
     """
     if not interaction.guild:
-        return False  # Em DMs, não há guild
-    # Se o usuário for dono do servidor ou tiver permissão de administrador
+        return False
     return (
         interaction.user.id == interaction.guild.owner_id
         or interaction.user.guild_permissions.administrator
@@ -64,7 +63,6 @@ def is_admin_or_owner(interaction: discord.Interaction) -> bool:
 # ===================================
 # VIEWS E MODAIS (INTERFACE DO TICKET)
 # ===================================
-
 class TicketPanelView(View):
     def __init__(self, cog):
         super().__init__(timeout=None)
@@ -139,8 +137,9 @@ class TicketEmbedCustomizationModal(Modal, title="Customização do Ticket"):
     async def on_submit(self, interaction: discord.Interaction):
         print("[TicketEmbedCustomizationModal] Modal enviado, iniciando verificação de admin...")
 
-        # Check: admin ou dono
-        if not is_admin_or_owner(interaction):
+        # Verifica se o usuário é admin ou dono
+        is_admin = await admin_or_owner_check(interaction)
+        if not is_admin:
             print("[TicketEmbedCustomizationModal] Falha na verificação de admin/owner.")
             return await interaction.response.send_message(
                 "❌ Somente administradores podem personalizar o embed.",
@@ -205,7 +204,6 @@ class TicketEmbedCustomizationModal(Modal, title="Customização do Ticket"):
 # =====================
 # COG PRINCIPAL DO TICKET
 # =====================
-
 class TicketCog(commands.Cog, name="TicketCog"):
     """Sistema Avançado de Tíquetes com Personalização Completa (Banco de Dados)."""
     
@@ -321,18 +319,9 @@ class TicketCog(commands.Cog, name="TicketCog"):
                 )
 
     # =====================
-    # DECORATOR DE CHECAGEM
-    # =====================
-    def admin_or_owner_check(self, interaction: discord.Interaction) -> bool:
-        """
-        Método auxiliar para checar se o usuário é admin ou dono do servidor.
-        Usado nos comandos via @app_commands.check.
-        """
-        return is_admin_or_owner(interaction)
-
-    # =====================
     # COMANDOS DE CONFIG
     # =====================
+
     @app_commands.check(admin_or_owner_check)
     @app_commands.command(name="setup_ticket", description="🎫 Cria um painel de tickets interativo (apenas admin/owner).")
     async def setup_ticket(self, interaction: discord.Interaction):
@@ -473,25 +462,6 @@ class TicketCog(commands.Cog, name="TicketCog"):
                 except Exception as e:
                     await interaction.response.send_message("❌ Erro ao atualizar o status do ticket.", ephemeral=True)
                     print(f"[on_interaction:status_] Erro ao atualizar status: {e}")
-
-    # ==========================
-    # ERRO DE CHECK (PERMISSÃO)
-    # ==========================
-    @setup_ticket.error
-    @config_ticket.error
-    @customize_ticket_embed.error
-    async def admin_check_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
-        """
-        Caso a verificação de admin/owner falhe, enviamos uma mensagem.
-        """
-        if isinstance(error, app_commands.CheckFailure):
-            # Se for falha na checagem, manda uma msg ephemeral
-            return await interaction.response.send_message(
-                "❌ Você não tem permissão de administrador ou não é dono do servidor.",
-                ephemeral=True
-            )
-        # Se for outro erro, deixamos vazar para ver nos logs
-        raise error
 
 async def setup(bot):
     await bot.add_cog(TicketCog(bot))
