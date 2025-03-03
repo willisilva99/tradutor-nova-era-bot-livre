@@ -74,7 +74,7 @@ def restore_telnet_connections():
     print("✅ Conexões Telnet restauradas a partir do DB.")
 
 async def load_cogs():
-    cogs = ["cogs.admin", "cogs.utility", "cogs.sevendays", "cogs.serverstatus"]
+    cogs = ["cogs.admin", "cogs.utility", "cogs.sevendays", "cogs.serverstatus", "cogs.ticket"]
     for cog in cogs:
         try:
             await bot.load_extension(cog)
