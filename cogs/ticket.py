@@ -1,3 +1,6 @@
+Vamos revisar o código para garantir que a personalização do ticket esteja funcionando corretamente. A seguir está um arquivo Python completo com as correções e melhorias necessárias para garantir que a personalização do embed funcione corretamente.
+
+```python name=ticket_bot.py
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -465,58 +468,4 @@ class TicketCog(commands.Cog, name="TicketCog"):
                         await interaction.response.send_message("🔒 Ticket fechado com sucesso!", ephemeral=True)
                     except Exception as e:
                         await interaction.response.send_message("❌ Erro ao fechar o ticket.", ephemeral=True)
-                        print(f"[on_interaction:close_] Erro ao fechar ticket: {e}")
-
-            # Chamar moderador
-            elif custom_id.startswith("call_mod_"):
-                channel_id = int(custom_id.split("_")[1])
-                channel = self.bot.get_channel(channel_id)
-                if channel:
-                    settings = self.get_guild_settings(str(interaction.guild.id))
-                    mention_list = []
-                    for role_id in settings.support_roles:
-                        role = interaction.guild.get_role(role_id)
-                        if role:
-                            mention_list.append(role.mention)
-                    if mention_list:
-                        await channel.send(f"🔔 Chamando suporte: {', '.join(mention_list)}")
-                    await interaction.response.send_message("🔔 Um moderador foi chamado para este ticket!", ephemeral=True)
-
-            # Marcar como Em Análise
-            elif custom_id.startswith("status_"):
-                settings = self.get_guild_settings(str(interaction.guild.id))
-                if not any(role.id in settings.support_roles for role in interaction.user.roles):
-                    return await interaction.response.send_message("❌ Você não tem permissão para alterar o status.", ephemeral=True)
-                
-                try:
-                    channel_id = int(custom_id.split("_")[1])
-                    channel = self.bot.get_channel(channel_id)
-                    async for message in channel.history(limit=20):
-                        if message.embeds:
-                            embed = message.embeds[0]
-                            embed_dict = embed.to_dict()
-                            new_fields = []
-                            updated = False
-                            for field in embed_dict.get("fields", []):
-                                if field["name"] == "Status":
-                                    new_fields.append({"name": "Status", "value": "Em Análise", "inline": True})
-                                    updated = True
-                                else:
-                                    new_fields.append(field)
-                            if not updated:
-                                new_fields.append({"name": "Status", "value": "Em Análise", "inline": True})
-                            embed_dict["fields"] = new_fields
-                            new_embed = discord.Embed.from_dict(embed_dict)
-                            await message.edit(embed=new_embed)
-                            break
-                    await interaction.response.send_message("✅ O ticket agora está marcado como 'Em Análise'.", ephemeral=True)
-                except Exception as e:
-                    await interaction.response.send_message("❌ Erro ao atualizar o status do ticket.", ephemeral=True)
-                    print(f"[on_interaction:status_] Erro ao atualizar status: {e}")
-
-#############################################
-# 8) SETUP DO COG
-#############################################
-async def setup(bot: commands.Bot):
-    await bot.add_cog(TicketCog(bot))
-    print("[setup] TicketCog carregado com sucesso!")
+                        print(f"[on_interaction:close_] Erro ao fechar ticket:
