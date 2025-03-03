@@ -65,6 +65,16 @@ class AdminCog(commands.Cog):
         embed = discord.Embed(title="⏳ Ban Temporário", description=f"**{user.mention} foi banido por {duration} minutos.**", color=discord.Color.red())
         await interaction.response.send_message(embed=embed)
 
+    @app_commands.command(name="ban", description="🚫 Bane permanentemente um usuário.")
+    async def ban(self, interaction: discord.Interaction, user: discord.Member, reason: str = "Não especificado"):
+        if not await self.check_permissions(interaction, "ban_members"):
+            return
+        
+        await interaction.guild.ban(user, reason=reason)
+        await self.log_action(interaction, "Ban Permanente", user, reason)
+        embed = discord.Embed(title="🚫 Ban Permanente", description=f"**{user.mention} foi banido permanentemente.**", color=discord.Color.red())
+        await interaction.response.send_message(embed=embed)
+
     @app_commands.command(name="warn", description="⚠️ Envia um aviso a um usuário.")
     async def warn(self, interaction: discord.Interaction, user: discord.Member, reason: str = "Não especificado"):
         if not await self.check_permissions(interaction, "manage_messages"):
@@ -80,28 +90,12 @@ class AdminCog(commands.Cog):
         elif self.warns[user.id] == 5:
             await self.kick(interaction, user, "5 avisos acumulados")
         elif self.warns[user.id] == 7:
-            await self.tempban(interaction, user, 1440, "7 avisos acumulados - ban permanente")
+            await self.ban(interaction, user, "7 avisos acumulados - ban permanente")
 
         await self.log_action(interaction, "Aviso", user, reason)
         embed = discord.Embed(title="⚠️ Usuário Avisado", description=f"**{user.mention} recebeu um aviso!** (Total: {self.warns[user.id]})", color=discord.Color.orange())
         await interaction.channel.send(embed=embed)
         await interaction.followup.send("✅ O usuário foi avisado.", ephemeral=True)
-
-    @app_commands.command(name="userinfo", description="🔍 Mostra informações sobre um usuário.")
-    async def userinfo(self, interaction: discord.Interaction, user: discord.Member):
-        embed = discord.Embed(title=f"🔍 Informações de {user.name}", color=discord.Color.blue())
-        embed.add_field(name="🆔 ID", value=user.id, inline=True)
-        embed.add_field(name="📅 Entrou no servidor", value=user.joined_at.strftime('%d/%m/%Y'), inline=True)
-        embed.add_field(name="🚀 Cargos", value=", ".join([role.name for role in user.roles if role.name != "@everyone"]) or "Nenhum", inline=False)
-        embed.add_field(name="⚠️ Avisos", value=str(self.warns.get(user.id, 0)), inline=True)
-        embed.set_thumbnail(url=user.avatar.url)
-        await interaction.response.send_message(embed=embed)
-
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        if self.anti_swear_active and any(word in message.content.lower() for word in ["palavrão1", "palavrão2"]):
-            await message.delete()
-            await message.channel.send(f"🚫 {message.author.mention}, palavrões não são permitidos!", delete_after=5)
 
 async def setup(bot):
     await bot.add_cog(AdminCog(bot))
