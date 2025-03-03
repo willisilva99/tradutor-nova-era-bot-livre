@@ -47,14 +47,25 @@ class BlacklistedUser(Base):
 Base.metadata.create_all(engine, checkfirst=True)
 
 # ===================================
+# FUNÇÃO DE CHECK: ADMIN OU OWNER
+# ===================================
+def is_admin_or_owner(interaction: discord.Interaction) -> bool:
+    """
+    Retorna True se o usuário for administrador ou dono do servidor.
+    """
+    if not interaction.guild:
+        return False  # Em DMs, não há guild
+    # Se o usuário for dono do servidor ou tiver permissão de administrador
+    return (
+        interaction.user.id == interaction.guild.owner_id
+        or interaction.user.guild_permissions.administrator
+    )
+
+# ===================================
 # VIEWS E MODAIS (INTERFACE DO TICKET)
 # ===================================
 
 class TicketPanelView(View):
-    """
-    View que exibe dois selects (tipo de problema e prioridade).
-    Cria o ticket apenas uma vez, mesmo se o usuário clicar mais de uma vez.
-    """
     def __init__(self, cog):
         super().__init__(timeout=None)
         self.cog = cog
@@ -106,12 +117,9 @@ class TicketPanelView(View):
             try:
                 await interaction.message.edit(view=self)
             except Exception as e:
-                print(f"Erro ao editar a mensagem do painel: {e}")
+                print(f"[TicketPanelView] Erro ao editar a mensagem do painel: {e}")
 
 class TicketChannelView(View):
-    """
-    View com botões para fechar, chamar moderador e marcar como Em Análise.
-    """
     def __init__(self, ticket_channel, owner_id):
         super().__init__(timeout=None)
         self.ticket_channel = ticket_channel
@@ -129,16 +137,24 @@ class TicketEmbedCustomizationModal(Modal, title="Customização do Ticket"):
     support_roles_input = TextInput(label="Cargos de Suporte (IDs separados por vírgula)", placeholder="Ex: 1234567890,0987654321", required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
+        print("[TicketEmbedCustomizationModal] Modal enviado, iniciando verificação de admin...")
+
+        # Check: admin ou dono
+        if not is_admin_or_owner(interaction):
+            print("[TicketEmbedCustomizationModal] Falha na verificação de admin/owner.")
+            return await interaction.response.send_message(
+                "❌ Somente administradores podem personalizar o embed.",
+                ephemeral=True
+            )
+
+        # Recupera o cog
         guild_id = str(interaction.guild.id)
         cog: "TicketCog" = interaction.client.get_cog("TicketCog")
         if not cog:
+            print("[TicketEmbedCustomizationModal] Cog não encontrado.")
             return await interaction.response.send_message("❌ Erro interno: Cog não encontrado.", ephemeral=True)
-        
-        # Verifica se o usuário é administrador
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Somente administradores podem personalizar o embed.", ephemeral=True)
 
-        # Atualiza as configurações da guilda no banco
+        print("[TicketEmbedCustomizationModal] Passou na verificação de admin, atualizando configurações...")
         with SessionLocal() as session:
             settings = session.query(TicketGuildSettings).filter_by(guild_id=guild_id).first()
             if not settings:
@@ -162,11 +178,13 @@ class TicketEmbedCustomizationModal(Modal, title="Customização do Ticket"):
             try:
                 roles = [int(role_id.strip()) for role_id in self.support_roles_input.value.split(",") if role_id.strip().isdigit()]
                 settings.support_roles = roles
-            except Exception:
+            except Exception as e:
+                print(f"[TicketEmbedCustomizationModal] Erro ao processar IDs dos cargos: {e}")
                 return await interaction.response.send_message("❌ Erro ao processar os IDs dos cargos.", ephemeral=True)
             
             session.commit()
 
+        # Exibe pré-visualização
         embed = discord.Embed(
             title=self.title_input.value,
             description=self.description_input.value,
@@ -177,7 +195,12 @@ class TicketEmbedCustomizationModal(Modal, title="Customização do Ticket"):
         embed.add_field(name="🎖️ Prioridade", value="Ex: Baixa/Média/Alta/Urgente", inline=True)
         embed.add_field(name="Status", value="Ex: Aberto/Em Análise/Fechado", inline=True)
         
-        await interaction.response.send_message("✅ Configurações atualizadas! Veja a pré-visualização abaixo:", embed=embed, ephemeral=True)
+        print("[TicketEmbedCustomizationModal] Configurações salvas, enviando embed de preview...")
+        await interaction.response.send_message(
+            "✅ Configurações atualizadas! Veja a pré-visualização abaixo:",
+            embed=embed,
+            ephemeral=True
+        )
 
 # =====================
 # COG PRINCIPAL DO TICKET
@@ -190,6 +213,7 @@ class TicketCog(commands.Cog, name="TicketCog"):
         self.bot = bot
         self.ticket_category_name = "Tickets"
         self.ticket_owners = {}  # canal_id -> user_id
+        print("[TicketCog] Iniciado.")
 
     def get_guild_settings(self, guild_id: str) -> TicketGuildSettings:
         with SessionLocal() as session:
@@ -219,9 +243,12 @@ class TicketCog(commands.Cog, name="TicketCog"):
         guild_id_str = str(interaction.guild.id)
         user_id_str = str(interaction.user.id)
 
+        print(f"[create_ticket_channel] Usuário {user_id_str} solicitando ticket ({problem_type}, {priority}) no guild {guild_id_str}.")
+
         # Verifica se o usuário está bloqueado
         with SessionLocal() as session:
             if session.query(BlacklistedUser).filter_by(user_id=user_id_str).first():
+                print("[create_ticket_channel] Usuário bloqueado.")
                 return await interaction.response.send_message("❌ Você não tem permissão para abrir tickets.", ephemeral=True)
 
         # Verifica/atualiza dados do usuário
@@ -233,6 +260,7 @@ class TicketCog(commands.Cog, name="TicketCog"):
                 session.commit()
 
             if user_data.open_tickets >= 3:
+                print("[create_ticket_channel] Usuário já tem 3 tickets abertos.")
                 return await interaction.response.send_message("⚠️ Você já tem 3 tickets abertos. Feche um antes de abrir outro.", ephemeral=True)
 
             user_data.ticket_count += 1
@@ -248,6 +276,7 @@ class TicketCog(commands.Cog, name="TicketCog"):
         category = discord.utils.get(guild.categories, name=self.ticket_category_name)
         if not category:
             category = await guild.create_category(self.ticket_category_name)
+            print(f"[create_ticket_channel] Categoria '{self.ticket_category_name}' criada.")
 
         # Define permissões
         overwrites = {
@@ -292,14 +321,22 @@ class TicketCog(commands.Cog, name="TicketCog"):
                 )
 
     # =====================
+    # DECORATOR DE CHECAGEM
+    # =====================
+    def admin_or_owner_check(self, interaction: discord.Interaction) -> bool:
+        """
+        Método auxiliar para checar se o usuário é admin ou dono do servidor.
+        Usado nos comandos via @app_commands.check.
+        """
+        return is_admin_or_owner(interaction)
+
+    # =====================
     # COMANDOS DE CONFIG
     # =====================
-
-    @app_commands.command(name="setup_ticket", description="🎫 Cria um painel de tickets interativo (apenas admin).")
+    @app_commands.check(admin_or_owner_check)
+    @app_commands.command(name="setup_ticket", description="🎫 Cria um painel de tickets interativo (apenas admin/owner).")
     async def setup_ticket(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Somente administradores podem usar este comando.", ephemeral=True)
-
+        print("[setup_ticket] Comando chamado.")
         embed = discord.Embed(
             title="📩 Criar um Ticket",
             description="Escolha o tipo de problema e a prioridade do atendimento.",
@@ -308,8 +345,9 @@ class TicketCog(commands.Cog, name="TicketCog"):
         view = TicketPanelView(self)
         await interaction.channel.send(embed=embed, view=view)
         await interaction.response.send_message("✅ Painel de tickets configurado!", ephemeral=True)
-    
-    @app_commands.command(name="config_ticket", description="Configura parâmetros básicos do ticket (apenas admin).")
+
+    @app_commands.check(admin_or_owner_check)
+    @app_commands.command(name="config_ticket", description="Configura parâmetros básicos do ticket (apenas admin/owner).")
     async def config_ticket(self, interaction: discord.Interaction, setting: str, value: str):
         """
         Exemplos de setting:
@@ -318,9 +356,7 @@ class TicketCog(commands.Cog, name="TicketCog"):
           - logs_channel (ID do canal)
           - evaluation_channel (ID do canal)
         """
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Somente administradores podem usar este comando.", ephemeral=True)
-
+        print("[config_ticket] Comando chamado. Setting:", setting, "Value:", value)
         guild_id = str(interaction.guild.id)
         with SessionLocal() as session:
             settings = session.query(TicketGuildSettings).filter_by(guild_id=guild_id).first()
@@ -352,11 +388,10 @@ class TicketCog(commands.Cog, name="TicketCog"):
 
         await interaction.response.send_message("✅ Configuração atualizada!", ephemeral=True)
     
-    @app_commands.command(name="customize_ticket_embed", description="Personalize o embed do ticket via painel interativo (apenas admin).")
+    @app_commands.check(admin_or_owner_check)
+    @app_commands.command(name="customize_ticket_embed", description="Personalize o embed do ticket via painel interativo (apenas admin/owner).")
     async def customize_ticket_embed(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Somente administradores podem usar este comando.", ephemeral=True)
-
+        print("[customize_ticket_embed] Comando chamado. Abrindo modal...")
         await interaction.response.send_modal(TicketEmbedCustomizationModal())
 
     # ====================================
@@ -373,13 +408,11 @@ class TicketCog(commands.Cog, name="TicketCog"):
                 if channel:
                     owner_id = self.ticket_owners.get(str(channel_id))
                     settings = self.get_guild_settings(str(interaction.guild.id))
-                    # Verifica se é dono ou tem cargo de suporte
                     if (interaction.user.id != owner_id and 
                         not any(role.id in settings.support_roles for role in interaction.user.roles)):
                         return await interaction.response.send_message("❌ Você não tem permissão para fechar este ticket.", ephemeral=True)
                     try:
                         await channel.delete()
-                        # Reduz contagem de tickets abertos do dono
                         if owner_id:
                             user_id_str = str(owner_id)
                             with SessionLocal() as session:
@@ -392,7 +425,7 @@ class TicketCog(commands.Cog, name="TicketCog"):
                         await interaction.response.send_message("🔒 Ticket fechado com sucesso!", ephemeral=True)
                     except Exception as e:
                         await interaction.response.send_message("❌ Erro ao fechar o ticket.", ephemeral=True)
-                        print(f"Erro ao fechar ticket: {e}")
+                        print(f"[on_interaction:close_] Erro ao fechar ticket: {e}")
 
             # Chamar moderador
             elif custom_id.startswith("call_mod_"):
@@ -400,7 +433,6 @@ class TicketCog(commands.Cog, name="TicketCog"):
                 channel = self.bot.get_channel(channel_id)
                 if channel:
                     settings = self.get_guild_settings(str(interaction.guild.id))
-                    # Menciona todos os cargos de suporte
                     mention_list = []
                     for role_id in settings.support_roles:
                         role = interaction.guild.get_role(role_id)
@@ -412,7 +444,6 @@ class TicketCog(commands.Cog, name="TicketCog"):
 
             # Marcar como Em Análise
             elif custom_id.startswith("status_"):
-                # Somente cargos de suporte podem alterar status
                 settings = self.get_guild_settings(str(interaction.guild.id))
                 if not any(role.id in settings.support_roles for role in interaction.user.roles):
                     return await interaction.response.send_message("❌ Você não tem permissão para alterar o status.", ephemeral=True)
@@ -441,7 +472,27 @@ class TicketCog(commands.Cog, name="TicketCog"):
                     await interaction.response.send_message("✅ O ticket agora está marcado como 'Em Análise'.", ephemeral=True)
                 except Exception as e:
                     await interaction.response.send_message("❌ Erro ao atualizar o status do ticket.", ephemeral=True)
-                    print(f"Erro ao atualizar status: {e}")
+                    print(f"[on_interaction:status_] Erro ao atualizar status: {e}")
+
+    # ==========================
+    # ERRO DE CHECK (PERMISSÃO)
+    # ==========================
+    @setup_ticket.error
+    @config_ticket.error
+    @customize_ticket_embed.error
+    async def admin_check_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        """
+        Caso a verificação de admin/owner falhe, enviamos uma mensagem.
+        """
+        if isinstance(error, app_commands.CheckFailure):
+            # Se for falha na checagem, manda uma msg ephemeral
+            return await interaction.response.send_message(
+                "❌ Você não tem permissão de administrador ou não é dono do servidor.",
+                ephemeral=True
+            )
+        # Se for outro erro, deixamos vazar para ver nos logs
+        raise error
 
 async def setup(bot):
     await bot.add_cog(TicketCog(bot))
+    print("[setup] TicketCog carregado com sucesso!")
