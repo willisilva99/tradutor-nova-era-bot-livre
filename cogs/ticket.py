@@ -463,3 +463,8 @@ class TicketCog(commands.Cog, name="TicketCog"):
                         if str(channel_id) in self.ticket_owners:
                             del self.ticket_owners[str(channel_id)]
                         await interaction.response.send_message("🔒 Ticket fechado com sucesso!", ephemeral=True)
+                    except Exception as e:
+                        await interaction.response.send_message("❌ Erro ao fechar o ticket.", ephemeral=True)
+                        print(f"[on_interaction:close_] Erro ao fechar ticket: {e}")
+
+           
