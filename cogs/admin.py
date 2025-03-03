@@ -1,69 +1,112 @@
-import discord
-from discord import app_commands
-from discord.ext import commands
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, EmbedBuilder, PermissionsBitField } = require('discord.js');
 
-class AdminCog(commands.Cog):
-    """Cog para comandos administrativos (ex: /clear)."""
+module.exports = {
+    data: new SlashCommandBuilder()
+        .setName('ban')
+        .setDescription('Bane um usuário do servidor.')
+        .addUserOption(option =>
+            option.setName('target')
+                .setDescription('Usuário a ser banido.')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('reason')
+                .setDescription('Motivo do banimento.')
+                .setRequired(false)),
 
-    def __init__(self, bot):
-        self.bot = bot
+    async execute(interaction) {
+        // Verifica se o usuário tem permissão de administrador
+        if (!interaction.member.permissions.has(PermissionsBitField.Flags.BanMembers)) {
+            return await interaction.reply({
+                content: "❌ **Você não tem permissão para banir membros!**",
+                ephemeral: true
+            });
+        }
 
-    @app_commands.command(
-        name="clear",
-        description="Limpa mensagens do chat (máx: 3000)."
-    )
-    @app_commands.describe(amount="Quantidade de mensagens a deletar (1-3000)")
-    @app_commands.checks.has_permissions(manage_messages=True)
-    async def clear(self, interaction: discord.Interaction, amount: int):
-        """
-        Deleta uma quantidade específica de mensagens no canal.
-        Exemplo de uso: /clear amount:10
-        """
-        if amount < 1 or amount > 3000:
-            # Retorna uma mensagem ephemeral para o usuário
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    description="⚠️ **Escolha um número entre 1 e 3000.**",
-                    color=discord.Color.yellow()
-                ),
-                ephemeral=True
-            )
-            return
+        const target = interaction.options.getUser('target');
+        const reason = interaction.options.getString('reason') ?? 'Sem motivo informado.';
 
-        # Defer para mostrar que estamos "pensando" (carregando)
-        await interaction.response.defer(thinking=True)
+        // Verifica se o usuário tentou se banir
+        if (target.id === interaction.user.id) {
+            return await interaction.reply({
+                content: "❌ **Você não pode se banir!**",
+                ephemeral: true
+            });
+        }
 
-        # Apaga as mensagens
-        deleted = await interaction.channel.purge(limit=amount)
+        // Cria os botões de confirmação
+        const confirmButton = new ButtonBuilder()
+            .setCustomId('confirm_ban')
+            .setLabel('✅ Confirmar Banimento')
+            .setStyle(ButtonStyle.Danger);
 
-        # Envia feedback (ephemeral = True)
-        embed = discord.Embed(
-            title="🧹 Limpeza",
-            description=f"{len(deleted)} mensagens apagadas!",
-            color=discord.Color.blue()
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        const cancelButton = new ButtonBuilder()
+            .setCustomId('cancel_ban')
+            .setLabel('❌ Cancelar')
+            .setStyle(ButtonStyle.Secondary);
 
-    @clear.error
-    async def clear_error(self, interaction: discord.Interaction, error):
-        """Trata erros do comando /clear."""
-        if isinstance(error, app_commands.MissingPermissions):
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    description="❌ **Você não tem permissão para apagar mensagens!**",
-                    color=discord.Color.red()
-                ),
-                ephemeral=True
-            )
-        else:
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    description=f"❌ **Erro:** {error}",
-                    color=discord.Color.red()
-                ),
-                ephemeral=True
-            )
+        const row = new ActionRowBuilder()
+            .addComponents(cancelButton, confirmButton);
 
-async def setup(bot):
-    """Função especial que o Discord.py usa para carregar a cog."""
-    await bot.add_cog(AdminCog(bot))
+        const embed = new EmbedBuilder()
+            .setTitle("⚠️ Confirmação de Banimento")
+            .setDescription(`Tem certeza de que deseja banir **${target.tag}**?`)
+            .addFields({ name: "Motivo:", value: reason })
+            .setColor('Red')
+            .setFooter({ text: `Ação solicitada por ${interaction.user.tag}`, iconURL: interaction.user.displayAvatarURL() });
+
+        // Envia a mensagem com os botões
+        await interaction.reply({
+            embeds: [embed],
+            components: [row],
+            ephemeral: true
+        });
+
+        // Filtro para capturar cliques nos botões
+        const filter = i => i.user.id === interaction.user.id;
+
+        // Criando o coletor para aguardar resposta
+        const collector = interaction.channel.createMessageComponentCollector({ filter, time: 15000 });
+
+        collector.on('collect', async i => {
+            if (i.customId === 'confirm_ban') {
+                try {
+                    const member = await interaction.guild.members.fetch(target.id);
+                    await member.ban({ reason });
+
+                    const successEmbed = new EmbedBuilder()
+                        .setTitle("🔨 Usuário Banido")
+                        .setDescription(`✅ **${target.tag}** foi banido com sucesso!`)
+                        .addFields({ name: "Motivo:", value: reason })
+                        .setColor('Green')
+                        .setFooter({ text: `Ação confirmada por ${interaction.user.tag}`, iconURL: interaction.user.displayAvatarURL() });
+
+                    await interaction.editReply({
+                        embeds: [successEmbed],
+                        components: []
+                    });
+
+                } catch (error) {
+                    console.error(error);
+                    await interaction.editReply({
+                        content: "❌ **Não foi possível banir esse usuário.** Verifique minhas permissões e tente novamente.",
+                        components: []
+                    });
+                }
+            } else if (i.customId === 'cancel_ban') {
+                await interaction.editReply({
+                    content: "🚫 **Ação cancelada! O usuário não foi banido.**",
+                    components: []
+                });
+            }
+        });
+
+        collector.on('end', async collected => {
+            if (collected.size === 0) {
+                await interaction.editReply({
+                    content: "⌛ **Tempo esgotado! O banimento não foi confirmado.**",
+                    components: []
+                });
+            }
+        });
+    }
+};
