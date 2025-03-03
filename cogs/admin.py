@@ -11,7 +11,7 @@ class AdminCog(commands.Cog):
 
     @app_commands.command(name="mute", description="🔇 Silencia um usuário por um tempo definido.")
     @app_commands.describe(user="Usuário a ser silenciado", duration="Duração em minutos (1-1440)", reason="Motivo do mute")
-    @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.checks.has_permissions(moderate_members=True, manage_roles=True)
     async def mute(self, interaction: discord.Interaction, user: discord.Member, duration: int, reason: str = "Não especificado"):
         if duration < 1 or duration > 1440:
             return await interaction.response.send_message("⏳ **Duração deve estar entre 1 e 1440 minutos!**", ephemeral=True)
@@ -27,7 +27,7 @@ class AdminCog(commands.Cog):
 
     @app_commands.command(name="unmute", description="🔊 Remove o silêncio de um usuário.")
     @app_commands.describe(user="Usuário a ser desmutado")
-    @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.checks.has_permissions(moderate_members=True, manage_roles=True)
     async def unmute(self, interaction: discord.Interaction, user: discord.Member):
         try:
             await user.timeout(None)
