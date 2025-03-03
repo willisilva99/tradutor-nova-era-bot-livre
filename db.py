@@ -33,14 +33,7 @@ class ServerStatusConfig(Base):
     channel_id = Column(String, nullable=False)
     message_id = Column(String, nullable=False)
 
-# ✅ NOVA Tabela: Definição da Tabela `ticket_category_config`
-# Essa tabela armazena a categoria (ID do canal) onde os tickets serão criados para cada guild.
-class TicketCategoryConfig(Base):
-    __tablename__ = "ticket_category_config"
 
-    id = Column(Integer, primary_key=True, index=True)
-    guild_id = Column(String, unique=True, index=True, nullable=False)
-    category_id = Column(String, nullable=False)
 
 # ✅ Criar tabelas apenas se não existirem
 try:
