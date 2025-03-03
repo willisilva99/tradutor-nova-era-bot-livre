@@ -1,6 +1,3 @@
-Vamos revisar o código para garantir que a personalização do ticket esteja funcionando corretamente. A seguir está um arquivo Python completo com as correções e melhorias necessárias para garantir que a personalização do embed funcione corretamente.
-
-```python name=ticket_bot.py
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -468,4 +465,6 @@ class TicketCog(commands.Cog, name="TicketCog"):
                         await interaction.response.send_message("🔒 Ticket fechado com sucesso!", ephemeral=True)
                     except Exception as e:
                         await interaction.response.send_message("❌ Erro ao fechar o ticket.", ephemeral=True)
-                        print(f"[on_interaction:close_] Erro ao fechar ticket:
+                        print(f"[on_interaction:close_] Erro ao fechar ticket: {e}")
+
+            # Chamar moderador
