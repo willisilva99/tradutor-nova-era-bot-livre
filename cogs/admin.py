@@ -55,15 +55,36 @@ class AdminCog(commands.Cog):
     @app_commands.describe(user="Usuário a ser avisado", reason="Motivo do aviso")
     @app_commands.checks.has_permissions(manage_messages=True)
     async def warn(self, interaction: discord.Interaction, user: discord.Member, reason: str = "Não especificado"):
-        embed = discord.Embed(title="⚠️ Aviso de Moderação", description=f"**{user.mention}, você recebeu um aviso!**", color=discord.Color.orange())
+        await interaction.response.defer(thinking=True, ephemeral=True)
+
+        embed = discord.Embed(
+            title="⚠️ Aviso de Moderação",
+            description=f"**{user.mention}, você recebeu um aviso!**",
+            color=discord.Color.orange()
+        )
         embed.add_field(name="Motivo", value=reason, inline=False)
         embed.set_footer(text=f"Aviso enviado por {interaction.user}", icon_url=interaction.user.avatar.url)
+
+        dm_sent = True
         try:
             await user.send(embed=embed)
         except discord.Forbidden:
-            await interaction.response.send_message("⚠️ **Usuário desativou mensagens diretas, aviso não enviado!**", ephemeral=True)
-        await interaction.response.send_message(embed=embed)
-        await interaction.channel.send(f"⚠️ {user.mention} recebeu um aviso! 🚨")
+            dm_sent = False
+
+        public_embed = discord.Embed(
+            title="⚠️ Usuário Avisado",
+            description=f"**{user.mention} recebeu um aviso!**",
+            color=discord.Color.orange()
+        )
+        public_embed.add_field(name="Motivo", value=reason, inline=False)
+        public_embed.set_footer(text=f"Ação realizada por {interaction.user}", icon_url=interaction.user.avatar.url)
+
+        await interaction.channel.send(embed=public_embed)
+
+        if dm_sent:
+            await interaction.followup.send("✅ O usuário foi avisado via DM.", ephemeral=True)
+        else:
+            await interaction.followup.send("⚠️ O usuário bloqueou DMs. Aviso enviado apenas no canal.", ephemeral=True)
 
     @app_commands.command(name="slowmode", description="⏳ Define um tempo entre mensagens no canal atual.")
     @app_commands.describe(seconds="Tempo entre mensagens em segundos (0 para desativar)")
