@@ -74,12 +74,13 @@ def restore_telnet_connections():
     print("✅ Conexões Telnet restauradas a partir do DB.")
 
 async def load_cogs():
-    # Inclua o nome do arquivo do cog de tickets na lista
+    # Inclua aqui o nome do seu novo cog "cogs.ajuda"
     cogs = [
         "cogs.admin",
         "cogs.utility",
         "cogs.sevendays",
-        "cogs.serverstatus"
+        "cogs.serverstatus",
+        "cogs.ajuda"  # Novo cog de ajuda
     ]
     for cog in cogs:
         try:
