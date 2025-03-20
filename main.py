@@ -80,7 +80,7 @@ async def load_cogs():
         "cogs.utility",
         "cogs.sevendays",
         "cogs.serverstatus",
-        "cogs.ajuda"  # Novo cog de ajuda
+        "cogs.ajuda_completa"  # Novo cog de ajuda
     ]
     for cog in cogs:
         try:
