@@ -5,17 +5,19 @@ from discord.ext import commands, tasks
 from discord import app_commands
 from datetime import datetime, timedelta
 
-# Importe do seu arquivo de DB
+# Importe do seu arquivo de DB (ajuste o caminho conforme seu projeto)
 from db import (
     SessionLocal,
     get_or_create_guild_ticket_config,
-    TicketMessage
+    TicketMessage  # se você tiver a tabela de log de mensagens
 )
+
 
 def gerar_codigo_ticket(tamanho=6):
     """Gera código aleatório (ex: AB12XY)."""
     chars = string.ascii_uppercase + string.digits
     return "".join(random.choice(chars) for _ in range(tamanho))
+
 
 class AdvancedTicketCog(commands.Cog):
     """Cog avançado que engloba configuração, criação e gestão de tickets + melhorias, com debug integrado."""
@@ -199,10 +201,12 @@ class AdvancedTicketCog(commands.Cog):
 
 
 # ===================== VIEWS DE CONFIG ===================== #
+
 class ConfigTicketView(discord.ui.View):
     """Menu para escolher o que configurar no ticket."""
     def __init__(self):
         super().__init__(timeout=None)
+        # Aqui está a lista de opções. *Certifique-se* de não deixar vazio!
         options = [
             discord.SelectOption(label="Definir Cargo Staff", value="staffrole"),
             discord.SelectOption(label="Definir Canal de Logs", value="logs"),
@@ -211,7 +215,7 @@ class ConfigTicketView(discord.ui.View):
         ]
         self.select = discord.ui.Select(
             placeholder="Escolha o que configurar...",
-            options=options,
+            options=options,   # <-- Precisamos de pelo menos 1 item
             custom_id="config_ticket_select"
         )
         self.add_item(self.select)
@@ -427,6 +431,7 @@ class AbrirTicketModal(discord.ui.Modal):
         finally:
             session.close()
 
+
 # ===================== CONTROLE DENTRO DO CANAL ===================== #
 
 class TicketChannelView(discord.ui.View):
@@ -565,6 +570,7 @@ class TicketChannelView(discord.ui.View):
             await dm.send(view=view)
         except:
             pass
+
 
 # ===================== SELECT MENUS DE STAFF E MEMBRO ===================== #
 
@@ -796,6 +802,7 @@ class MemberSelectView(discord.ui.View):
             return
         await existing.delete(reason="Deletando call do ticket")
         await interaction.followup.send("Call de voz deletada!", ephemeral=True)
+
 
 # ===================== MODAL AVALIAÇÃO ===================== #
 class AvaliacaoModal(discord.ui.Modal):
