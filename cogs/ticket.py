@@ -5,31 +5,29 @@ from discord.ext import commands, tasks
 from discord import app_commands
 from datetime import datetime, timedelta
 
-# Importe do seu arquivo de DB (ajuste o caminho conforme seu projeto)
+# Ajuste o import abaixo de acordo com seu projeto
 from db import (
     SessionLocal,
     get_or_create_guild_ticket_config,
-    TicketMessage  # se você tiver a tabela de log de mensagens
+    TicketMessage  # se você estiver logando as mensagens do ticket
 )
 
-
 def gerar_codigo_ticket(tamanho=6):
-    """Gera código aleatório (ex: AB12XY)."""
+    """Gera código aleatório (ex: 'AB12XY') para identificar o ticket."""
     chars = string.ascii_uppercase + string.digits
     return "".join(random.choice(chars) for _ in range(tamanho))
-
 
 class AdvancedTicketCog(commands.Cog):
     """Cog avançado que engloba configuração, criação e gestão de tickets + melhorias, com debug integrado."""
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Inicia loop de auto-fechamento
+        # Inicia loop de auto-fechamento de tickets
         self.autoclose_loop.start()
 
     def cog_unload(self):
         self.autoclose_loop.cancel()
 
-    # ============= GLOBAL ERROR HANDLER PARA SLASH COMMANDS =============
+    # ===================== 1) GLOBAL ERROR HANDLER PARA SLASH COMMANDS ===================== #
     @commands.Cog.listener()
     async def on_app_command_error(self, interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
         """Captura erros de qualquer slash command deste cog."""
@@ -55,7 +53,7 @@ class AdvancedTicketCog(commands.Cog):
         except:
             pass
 
-    # ============= COMANDO: /ticketconfig =============
+    # ===================== 2) COMANDO: /ticketconfig ===================== #
     @app_commands.command(name="ticketconfig", description="Menu de Configuração Avançada do Sistema de Tickets.")
     @commands.has_permissions(administrator=True)
     async def ticketconfig(self, interaction: discord.Interaction):
@@ -64,9 +62,8 @@ class AdvancedTicketCog(commands.Cog):
         - Cargo Staff
         - Canal de Logs
         - Canal de Avaliação
-        - Categoria para criação dos tickets
+        - Categoria p/ tickets
         """
-        # DEBUG
         try:
             print(f"[DEBUG] /ticketconfig chamado por {interaction.user} em {interaction.guild.name} (ID={interaction.guild_id})")
 
@@ -90,8 +87,9 @@ class AdvancedTicketCog(commands.Cog):
                 ),
                 color=discord.Color.blurple()
             )
-            view = ConfigTicketView()
+            view = ConfigTicketView()  # View com o Select Menu não-vazio
 
+            # Resposta ephemeral para o usuário
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
             print("[DEBUG] /ticketconfig finalizado sem erros.")
         except Exception as e:
@@ -101,7 +99,7 @@ class AdvancedTicketCog(commands.Cog):
                 ephemeral=True
             )
 
-    # ============= COMANDO: /ticketpanel =============
+    # ===================== 3) COMANDO: /ticketpanel ===================== #
     @app_commands.command(name="ticketpanel", description="Cria um painel para abertura de tickets.")
     @commands.has_permissions(manage_guild=True)
     async def ticketpanel(self, interaction: discord.Interaction):
@@ -112,13 +110,12 @@ class AdvancedTicketCog(commands.Cog):
         )
         await interaction.response.send_message(embed=embed, view=TicketPanelView(self.bot))
 
-    # ============= COMANDO: /reopenticket =============
-    @app_commands.command(name="reopenticket", description="Reabre um ticket fechado recentemente (renomeia canal).")
+    # ===================== 4) COMANDO: /reopenticket ===================== #
+    @app_commands.command(name="reopenticket", description="Reabre um ticket fechado (renomeia canal).")
     @commands.has_permissions(manage_guild=True)
     async def reopenticket(self, interaction: discord.Interaction, channel: discord.TextChannel):
         """
-        Exemplo de uso: /reopenticket #closed-fulano
-        Se o canal estiver 'closed-', renomeia para 'ticket-' e restaura permissões do autor.
+        /reopenticket #closed-fulano => renomeia para ticket-fulano e restaura permissão ao autor.
         """
         if not channel.name.startswith("closed-"):
             await interaction.response.send_message("Este canal não está marcado como 'closed-'.", ephemeral=True)
@@ -129,7 +126,6 @@ class AdvancedTicketCog(commands.Cog):
         try:
             await channel.edit(name=new_name)
             topic = channel.topic or ""
-            # Tenta extrair ID do autor do topic (ex: "Ticket de <@123> | Código: AB12CD")
             import re
             match = re.search(r"<@!?(\d+)>", topic)
             if match:
@@ -144,12 +140,12 @@ class AdvancedTicketCog(commands.Cog):
         except Exception as e:
             await interaction.response.send_message(f"Falha ao reabrir: {e}", ephemeral=True)
 
-    # ============= LOOP: Fechar Tickets Inativos =============
+    # ===================== 5) AUTO-FECHAMENTO DE TICKETS INATIVOS ===================== #
     @tasks.loop(minutes=10)
     async def autoclose_loop(self):
         """
-        A cada 10 minutos, procura canais 'ticket-' e verifica a última mensagem.
-        Se passou mais de 60 minutos sem mensagem, renomeia para 'closed-...'.
+        A cada 10 minutos, procura canais 'ticket-' e verifica a última msg.
+        Se passou +60min sem msg, renomeia para 'closed-...'.
         """
         now = datetime.utcnow()
         inatividade_max = timedelta(minutes=60)
@@ -159,11 +155,7 @@ class AdvancedTicketCog(commands.Cog):
                 if channel.name.startswith("ticket-"):
                     try:
                         history = [m async for m in channel.history(limit=1)]
-                        if history:
-                            last_msg_time = history[0].created_at
-                        else:
-                            # Se não há mensagens, use a data de criação do canal
-                            last_msg_time = channel.created_at
+                        last_msg_time = history[0].created_at if history else channel.created_at
                         if (now - last_msg_time) > inatividade_max:
                             await channel.send("Fechando ticket por inatividade...")
                             new_name = channel.name.replace("ticket-", "closed-")
@@ -171,7 +163,7 @@ class AdvancedTicketCog(commands.Cog):
                     except Exception as e:
                         print(f"[autoclose_loop] Erro ao fechar inativo {channel.name}: {e}")
 
-    # ============= EVENTO on_message: Salvar Logs de Conversa =============
+    # ===================== 6) LOG DE MENSAGENS (on_message) ===================== #
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot:
@@ -187,6 +179,7 @@ class AdvancedTicketCog(commands.Cog):
                     after = topic.split("Código:")[1].strip()
                     code = after.split()[0].replace("`", "").strip()
 
+                # Salva no BD (TicketMessage)
                 ticket_log = TicketMessage(
                     guild_id=str(message.guild.id),
                     channel_id=str(message.channel.id),
@@ -199,14 +192,14 @@ class AdvancedTicketCog(commands.Cog):
             finally:
                 session.close()
 
-
-# ===================== VIEWS DE CONFIG ===================== #
+# ===================== VIEW: ConfigTicketView (SELECT MENU) ===================== #
 
 class ConfigTicketView(discord.ui.View):
     """Menu para escolher o que configurar no ticket."""
     def __init__(self):
         super().__init__(timeout=None)
-        # Aqui está a lista de opções. *Certifique-se* de não deixar vazio!
+        
+        # IMPORTANTE: A lista de opções NÃO pode estar vazia!
         options = [
             discord.SelectOption(label="Definir Cargo Staff", value="staffrole"),
             discord.SelectOption(label="Definir Canal de Logs", value="logs"),
@@ -215,7 +208,7 @@ class ConfigTicketView(discord.ui.View):
         ]
         self.select = discord.ui.Select(
             placeholder="Escolha o que configurar...",
-            options=options,   # <-- Precisamos de pelo menos 1 item
+            options=options,
             custom_id="config_ticket_select"
         )
         self.add_item(self.select)
@@ -242,7 +235,7 @@ class ConfigSetStaffRoleModal(discord.ui.Modal):
         super().__init__(title="Definir Cargo Staff")
         self.role_input = discord.ui.TextInput(
             label="ID do Cargo Staff",
-            placeholder="Exemplo: 123456789012345678",
+            placeholder="Ex: 123456789012345678",
             required=True
         )
         self.add_item(self.role_input)
@@ -255,7 +248,7 @@ class ConfigSetStaffRoleModal(discord.ui.Modal):
             cfg.cargo_staff_id = role_id_str
             session.commit()
             await interaction.response.send_message(
-                f"Cargo staff definido para ID `{role_id_str}`!",
+                f"Cargo staff definido para `{role_id_str}`!",
                 ephemeral=True
             )
         finally:
@@ -267,7 +260,7 @@ class ConfigSetLogsModal(discord.ui.Modal):
         super().__init__(title="Definir Canal de Logs")
         self.channel_input = discord.ui.TextInput(
             label="ID do Canal de Logs",
-            placeholder="Exemplo: 123456789012345678",
+            placeholder="Ex: 123456789012345678",
             required=True
         )
         self.add_item(self.channel_input)
@@ -280,7 +273,7 @@ class ConfigSetLogsModal(discord.ui.Modal):
             cfg.channel_logs_id = channel_id_str
             session.commit()
             await interaction.response.send_message(
-                f"Canal de logs definido para `{channel_id_str}`!",
+                f"Canal de logs definido p/ `{channel_id_str}`!",
                 ephemeral=True
             )
         finally:
@@ -292,7 +285,7 @@ class ConfigSetAvaliationsModal(discord.ui.Modal):
         super().__init__(title="Definir Canal de Avaliação")
         self.channel_input = discord.ui.TextInput(
             label="ID do Canal de Avaliação",
-            placeholder="Exemplo: 987654321098765432",
+            placeholder="Ex: 987654321098765432",
             required=True
         )
         self.add_item(self.channel_input)
@@ -305,7 +298,7 @@ class ConfigSetAvaliationsModal(discord.ui.Modal):
             cfg.channel_avaliation_id = channel_id_str
             session.commit()
             await interaction.response.send_message(
-                f"Canal de avaliação definido para `{channel_id_str}`!",
+                f"Canal de avaliação definido p/ `{channel_id_str}`!",
                 ephemeral=True
             )
         finally:
@@ -317,7 +310,7 @@ class ConfigSetCategoryModal(discord.ui.Modal):
         super().__init__(title="Definir Categoria de Tickets")
         self.cat_input = discord.ui.TextInput(
             label="ID da Categoria",
-            placeholder="Exemplo: 987654321012345678",
+            placeholder="Ex: 987654321012345678",
             required=True
         )
         self.add_item(self.cat_input)
@@ -330,14 +323,14 @@ class ConfigSetCategoryModal(discord.ui.Modal):
             cfg.category_ticket_id = cat_id_str
             session.commit()
             await interaction.response.send_message(
-                f"Categoria de tickets definida para `{cat_id_str}`!",
+                f"Categoria de tickets definida p/ `{cat_id_str}`!",
                 ephemeral=True
             )
         finally:
             session.close()
 
 
-# ===================== CRIAÇÃO DE TICKET ===================== #
+# ===================== CRIAÇÃO DE TICKETS: /ticketpanel ===================== #
 
 class TicketPanelView(discord.ui.View):
     def __init__(self, bot: commands.Bot):
@@ -364,10 +357,12 @@ class AbrirTicketModal(discord.ui.Modal):
         self.add_item(self.motivo)
 
     async def on_submit(self, interaction: discord.Interaction):
+        # Cria canal do ticket e envia embed inicial
         session = SessionLocal()
         try:
             cfg = get_or_create_guild_ticket_config(session, str(interaction.guild_id))
             guild = interaction.guild
+
             staff_role = guild.get_role(int(cfg.cargo_staff_id)) if cfg.cargo_staff_id else None
             logs_ch = guild.get_channel(int(cfg.channel_logs_id)) if cfg.channel_logs_id else None
             avaliations_ch = guild.get_channel(int(cfg.channel_avaliation_id)) if cfg.channel_avaliation_id else None
@@ -411,6 +406,8 @@ class AbrirTicketModal(discord.ui.Modal):
                 embed=embed,
                 view=view
             )
+
+            # Log no canal de logs
             if logs_ch:
                 log_embed = discord.Embed(
                     title="Novo Ticket Aberto",
@@ -432,7 +429,7 @@ class AbrirTicketModal(discord.ui.Modal):
             session.close()
 
 
-# ===================== CONTROLE DENTRO DO CANAL ===================== #
+# ===================== GERENCIAMENTO DENTRO DO CANAL DE TICKET ===================== #
 
 class TicketChannelView(discord.ui.View):
     """Botões + menus para gerenciar o ticket (staff e membro)."""
@@ -544,6 +541,7 @@ class TicketChannelView(discord.ui.View):
             pass
 
     async def enviar_avaliacao_dm(self):
+        """Envia DM ao autor solicitando avaliação do atendimento."""
         user = self.autor_ticket
         if not self.avaliations_channel:
             return
@@ -572,10 +570,9 @@ class TicketChannelView(discord.ui.View):
             pass
 
 
-# ===================== SELECT MENUS DE STAFF E MEMBRO ===================== #
+# ===================== MENU SELECT STAFF (AÇÕES) ===================== #
 
 class StaffSelectView(discord.ui.View):
-    """Select menu para ações de staff no ticket."""
     def __init__(self, autor_ticket: discord.User, staff_role: discord.Role, code: str, logs_channel: discord.TextChannel):
         super().__init__(timeout=None)
         self.autor_ticket = autor_ticket
@@ -628,12 +625,13 @@ class StaffSelectView(discord.ui.View):
             await self._delete_call(interaction)
 
         elif op == "transfer_ticket":
-            await interaction.response.send_message("Digite o ID do novo cargo staff para transferência:", ephemeral=True)
+            await interaction.response.send_message("Digite o ID do novo cargo staff p/ transferência:", ephemeral=True)
             await self._transferir_ticket(interaction)
 
     async def _aguardar_usuario(self, interaction: discord.Interaction, adicionar: bool):
         def check(msg: discord.Message):
             return msg.author.id == interaction.user.id and msg.channel == interaction.channel
+
         try:
             msg = await self.select.view.bot.wait_for("message", check=check, timeout=60)
         except:
@@ -654,13 +652,12 @@ class StaffSelectView(discord.ui.View):
             await interaction.followup.send("Usuário não encontrado!", ephemeral=True)
             return
 
+        overwrites = interaction.channel.overwrites
         if adicionar:
-            overwrites = interaction.channel.overwrites
             overwrites[user] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
             await interaction.channel.edit(overwrites=overwrites)
             await interaction.followup.send(f"O usuário {user.mention} agora tem acesso ao ticket.", ephemeral=True)
         else:
-            overwrites = interaction.channel.overwrites
             if user not in overwrites:
                 await interaction.followup.send("Este usuário não tinha acesso.", ephemeral=True)
                 return
@@ -726,13 +723,14 @@ class StaffSelectView(discord.ui.View):
                 await self.logs_channel.send(
                     f"O ticket {interaction.channel.mention} foi transferido de {self.staff_role.mention if self.staff_role else '???'} para {new_role.mention}."
                 )
-            await interaction.followup.send(f"Ticket transferido para o cargo {new_role.mention}!", ephemeral=True)
+            await interaction.followup.send(f"Ticket transferido p/ o cargo {new_role.mention}!", ephemeral=True)
         except:
             await interaction.followup.send("ID de cargo inválido!", ephemeral=True)
 
 
+# ===================== MENU SELECT MEMBRO (AÇÕES) ===================== #
+
 class MemberSelectView(discord.ui.View):
-    """Select menu para ações do autor do ticket."""
     def __init__(self, autor_ticket: discord.User, staff_role: discord.Role, code: str, logs_channel: discord.TextChannel):
         super().__init__(timeout=None)
         self.autor_ticket = autor_ticket
@@ -804,7 +802,7 @@ class MemberSelectView(discord.ui.View):
         await interaction.followup.send("Call de voz deletada!", ephemeral=True)
 
 
-# ===================== MODAL AVALIAÇÃO ===================== #
+# ===================== MODAL AVALIAÇÃO (Ao Fechar o Ticket) ===================== #
 class AvaliacaoModal(discord.ui.Modal):
     def __init__(self, avaliations_channel: discord.TextChannel, code: str):
         super().__init__(title="Avalie o Atendimento")
@@ -849,6 +847,6 @@ class AvaliacaoModal(discord.ui.Modal):
         await interaction.response.send_message("Obrigado pela sua avaliação!", ephemeral=True)
 
 
-# ===================== SETUP COG ===================== #
+# ===================== FUNÇÃO DE SETUP ===================== #
 async def setup(bot: commands.Bot):
     await bot.add_cog(AdvancedTicketCog(bot))
