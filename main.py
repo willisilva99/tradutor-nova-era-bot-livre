@@ -38,14 +38,14 @@ async def on_ready():
     bot.ready_flag = True
     print(f"✅ Bot conectado como {bot.user}")
 
+    # Sincroniza comandos de slash (necessário para que /ticketpanel etc. apareçam)
     await bot.tree.sync()
-    print(f"✅ Comandos de Slash sincronizados!")
+    print("✅ Comandos de Slash sincronizados!")
 
     if not change_status.is_running():
         change_status.start()
 
     restore_telnet_connections()
-
     print("Bot está pronto!")
 
 def restore_telnet_connections():
@@ -74,7 +74,14 @@ def restore_telnet_connections():
     print("✅ Conexões Telnet restauradas a partir do DB.")
 
 async def load_cogs():
-    cogs = ["cogs.admin", "cogs.utility", "cogs.sevendays", "cogs.serverstatus"]
+    # Inclua o nome do arquivo do cog de tickets na lista
+    cogs = [
+        "cogs.admin",
+        "cogs.utility",
+        "cogs.sevendays",
+        "cogs.serverstatus",
+        "cogs.ticket"  # <-- Aqui entra o seu cog de tickets
+    ]
     for cog in cogs:
         try:
             await bot.load_extension(cog)
