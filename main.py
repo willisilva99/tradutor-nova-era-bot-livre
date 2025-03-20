@@ -79,8 +79,7 @@ async def load_cogs():
         "cogs.admin",
         "cogs.utility",
         "cogs.sevendays",
-        "cogs.serverstatus",
-        "cogs.ticket"  # <-- Aqui entra o seu cog de tickets
+        "cogs.serverstatus"
     ]
     for cog in cogs:
         try:
