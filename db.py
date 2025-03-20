@@ -1,5 +1,6 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String
+from datetime import datetime
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 # ✅ Garantir que a variável DATABASE_URL está definida (evita fallback para SQLite)
@@ -25,6 +26,7 @@ class ServerConfig(Base):
     password = Column(String, nullable=True)
     channel_id = Column(String, nullable=False)
 
+
 # ---------------------------------------------------
 # Tabela ServerStatusConfig
 # ---------------------------------------------------
@@ -37,8 +39,9 @@ class ServerStatusConfig(Base):
     channel_id = Column(String, nullable=False)
     message_id = Column(String, nullable=False)
 
+
 # ---------------------------------------------------
-# Nova Tabela: GuildTicketConfig (Configurações de Ticket)
+# Tabela GuildTicketConfig (Configurações de Ticket)
 # ---------------------------------------------------
 class GuildTicketConfig(Base):
     """
@@ -57,6 +60,31 @@ class GuildTicketConfig(Base):
     channel_logs_id = Column(String, nullable=True)
     channel_avaliation_id = Column(String, nullable=True)
     category_ticket_id = Column(String, nullable=True)
+
+
+# ---------------------------------------------------
+# Nova Tabela para Log de Mensagens de Tickets
+# ---------------------------------------------------
+class TicketMessage(Base):
+    """
+    Registra cada mensagem enviada em canais de ticket, permitindo histórico completo.
+    - guild_id: guild em que o ticket está
+    - channel_id: canal de texto do ticket
+    - ticket_code: código único do ticket (ex: AB12XY)
+    - author_id: ID de quem enviou a mensagem
+    - content: texto da mensagem
+    - timestamp: data/hora em que foi enviado
+    """
+    __tablename__ = "ticket_message"
+
+    id = Column(Integer, primary_key=True, index=True)
+    guild_id = Column(String, nullable=False)
+    channel_id = Column(String, nullable=False)
+    ticket_code = Column(String, nullable=False)
+    author_id = Column(String, nullable=False)
+    content = Column(Text, nullable=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
 
 # ---------------------------------------------------
 # Funções de ajuda para TicketConfig
