@@ -50,38 +50,80 @@ EXCLAMATION_COMMANDS_INFO = (
 )
 
 
+class ComandosView(discord.ui.View):
+    """View com botões 'Sim' e 'Não' para exibir ou não os comandos."""
+    def __init__(self, timeout: float = 30.0, embed_ajuda: discord.Embed = None):
+        super().__init__(timeout=timeout)
+        self.message = None       # Armazenará a mensagem com os botões
+        self.embed_ajuda = embed_ajuda  # O embed com comandos que exibiremos se o usuário clicar em 'Sim'
+
+    @discord.ui.button(label="Sim", style=discord.ButtonStyle.success)
+    async def botao_sim(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Usuário quer ver os comandos."""
+        # Manda o embed de ajuda no mesmo canal
+        await interaction.response.send_message(embed=self.embed_ajuda)
+
+        # Remove a mensagem original com os botões
+        if self.message:
+            try:
+                await self.message.delete()
+            except:
+                pass
+        self.stop()
+
+    @discord.ui.button(label="Não", style=discord.ButtonStyle.danger)
+    async def botao_nao(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Usuário não quer ver os comandos."""
+        if self.message:
+            try:
+                await self.message.delete()
+            except:
+                pass
+        self.stop()
+
+    async def on_timeout(self):
+        """Após o tempo definido (30s), se ninguém clicar, apaga a mensagem."""
+        if self.message:
+            try:
+                await self.message.delete()
+            except:
+                pass
+        self.stop()
+
+
 class AjudaComandosCog(commands.Cog):
-    """Envia a lista de comandos se detectar palavras-chave na mensagem."""
+    """Quando detecta palavras-chave, pergunta se o usuário quer ver a lista de comandos."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # Ignora mensagens de bots (inclusive do próprio bot)
+        # Ignora mensagens de bot
         if message.author.bot:
             return
         
-        # Transforma a mensagem em minúsculas para comparação
         content_lower = message.content.lower()
-        
-        # Verifica se a mensagem contém alguma das palavras-chave
         if any(keyword in content_lower for keyword in KEYWORDS):
-            # Exemplo de uso de embed
-            embed = discord.Embed(
+            # Cria o embed
+            embed_ajuda = discord.Embed(
                 title="Lista de Comandos do Servidor",
-                description=(
-                    f"{SLASH_COMMANDS_INFO}\n\n"
-                    f"{EXCLAMATION_COMMANDS_INFO}\n"
-                    "\n> **Dica**: experimente digitar `/credito` ou `!vote`, por exemplo!"
-                ),
+                description=f"{SLASH_COMMANDS_INFO}\n\n{EXCLAMATION_COMMANDS_INFO}",
                 color=discord.Color.green()
             )
-            
-            # Envia no canal onde a palavra-chave foi detectada
-            await message.channel.send(embed=embed)
+
+            # Cria a view com botões
+            view = ComandosView(embed_ajuda=embed_ajuda)
+
+            # Envia a mensagem perguntando "Quer ver os comandos?"
+            sent = await message.channel.send(
+                f"{message.author.mention}, deseja ver a lista de comandos do servidor?",
+                view=view
+            )
+
+            # Armazena a mensagem no objeto da view para poder deletá-la depois
+            view.message = sent
 
 
-# Função para carregar o Cog
 async def setup(bot: commands.Bot):
     await bot.add_cog(AjudaComandosCog(bot))
