@@ -234,7 +234,6 @@ def criar_embed_armaduras() -> discord.Embed:
 # ===================================================
 # ================ 3) VEÍCULOS ======================
 # ===================================================
-
 KEYWORDS_VEICULOS = [
     "como fabrica carro",
     "aonde acho veiculo",
@@ -254,7 +253,6 @@ def criar_embed_veiculos() -> discord.Embed:
     )
     embed.set_image(url="https://imgur.com/zPqLmH8.jpg")  # Imagem ilustrativa
 
-    # Dividimos o texto em campos para não estourar limite de embed
     texto_introducao = (
         "**Introdução**\n"
         "Quem disse que sobreviver seria fácil? Precisamos nos esforçar para nos mantermos vivos, explorar, fazer nossas "
@@ -360,11 +358,9 @@ def criar_embed_veiculos() -> discord.Embed:
     embed.set_footer(text="Veículos em 7 Days to Die • Exemplo de Servidor")
     return embed
 
-
 # ===================================================
 # ========== 4) ESTAÇÕES DE TRABALHO =================
 # ===================================================
-
 KEYWORDS_ESTACOES = [
     "estação de trabalhado",
     "estacao de trabalho",
@@ -382,8 +378,6 @@ def criar_embed_estacoes() -> discord.Embed:
         color=discord.Color.orange()
     )
 
-    # Quebramos o texto em vários fields para não ultrapassar limites do Discord
-    # Texto original do usuário
     texto_intro = (
         "**Introdução**\n"
         "Quem disse que sobreviver seria fácil? Precisamos nos esforçar para nos mantermos vivos, explorar, "
@@ -403,7 +397,7 @@ def criar_embed_estacoes() -> discord.Embed:
         "• Receitas avançadas pedem panela ou grelha (encontre em cozinhas).\n"
         "• Gera calor (atrai zumbis) e pode te queimar se passar por cima!\n"
     )
-    embed.add_field(name="Fogueira", value=f"{texto_fogueira}", inline=False)
+    embed.add_field(name="Fogueira", value=texto_fogueira, inline=False)
 
     texto_coletor = (
         "**Coletor de orvalho**\n"
@@ -479,39 +473,33 @@ def criar_embed_estacoes() -> discord.Embed:
 # ===================================================
 # ==============  VIEW DE BOTÕES  ===================
 # ===================================================
-
 class PerguntaView(discord.ui.View):
     """
     View genérica: exibe botões "Sim" e "Não".
-    - Se clicar em "Sim": envia o embed e apaga a pergunta; 1 min depois, apaga o embed.
-    - Se clicar em "Não" ou se der timeout (30s), apaga a pergunta e não faz mais nada.
+    - Se clicar em "Sim": envia o embed e apaga a mensagem de pergunta; 1 min depois, apaga o embed.
+    - Se clicar em "Não" ou se der timeout (30s), apaga a mensagem de pergunta e não faz mais nada.
     """
     def __init__(self, embed: discord.Embed, timeout: float = 30.0, remover_msg_depois: float = 60.0):
         super().__init__(timeout=timeout)
-        self.message = None               # Referência à mensagem de pergunta
-        self.embed = embed                # Embed que será enviado se clicar em "Sim"
+        self.message = None  # Referência à mensagem de pergunta
+        self.embed = embed   # Embed que será enviado se clicar em "Sim"
         self.remover_msg_depois = remover_msg_depois
 
     @discord.ui.button(label="Sim", style=discord.ButtonStyle.success)
     async def botao_sim(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(thinking=True)
-        # Envia o embed no canal
-        msg_embed = await interaction.followup.send(embed=self.embed)
-
-        # Apaga a mensagem de pergunta (onde estão os botões)
+        # Correção aplicada: responde imediatamente com o embed
+        await interaction.response.send_message(embed=self.embed)
         if self.message:
             try:
                 await self.message.delete()
             except:
                 pass
-
-        # Aguarda X segundos e então apaga o embed
+        msg_embed = await interaction.original_response()
         await asyncio.sleep(self.remover_msg_depois)
         try:
             await msg_embed.delete()
         except:
             pass
-
         self.stop()
 
     @discord.ui.button(label="Não", style=discord.ButtonStyle.danger)
@@ -537,7 +525,6 @@ class PerguntaView(discord.ui.View):
 # ===================================================
 # ========== COG PRINCIPAL (AJUDA COMPLETA) =========
 # ===================================================
-
 class AjudaCompletaCog(commands.Cog):
     """
     Cog que detecta keywords para:
@@ -547,7 +534,6 @@ class AjudaCompletaCog(commands.Cog):
     - ESTAÇÕES DE TRABALHO (FORJA, FOGUEIRA, BANCADA, etc.)
     E, ao encontrar, pergunta se o usuário quer ver. Usa botões "Sim"/"Não".
     """
-
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
