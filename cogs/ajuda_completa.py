@@ -55,10 +55,7 @@ def criar_embed_comandos() -> discord.Embed:
     """Embed completo para os Comandos do Servidor."""
     embed = discord.Embed(
         title="Lista de Comandos do Servidor",
-        description=(
-            f"{SLASH_COMMANDS_INFO}\n\n"
-            f"{EXCLAMATION_COMMANDS_INFO}\n"
-        ),
+        description=f"{SLASH_COMMANDS_INFO}\n\n{EXCLAMATION_COMMANDS_INFO}",
         color=discord.Color.green()
     )
     embed.set_footer(text="Comandos do Servidor • 7 Days to Die")
@@ -77,23 +74,20 @@ KEYWORDS_ARMADURAS = [
 ]
 
 def criar_embed_armaduras() -> discord.Embed:
-    """Embed completo para Armaduras."""
+    """Embed completo para Armaduras, dividido em duas partes."""
     embed = discord.Embed(
         title="Guia de Armaduras",
         description="Confira cada tipo de armadura, seus bônus e conjuntos.",
         color=discord.Color.gold()
     )
 
-    # Texto extenso das armaduras (conforme enviado pelo usuário)
-    texto_armaduras = (
+    texto_armaduras_parte1 = (
         "🪖 **Armadura Primitiva**\n"
         "Não possui bônus de conjunto.\n"
         "Geralmente é a primeira que você encontra ou fabrica.\n"
         "Dá uma defesa inicial, mas não espere nada além do básico.\n\n"
-
         "☀️ **Armaduras Leves**\n"
         "Ideais para quem quer mobilidade e foco em habilidades específicas sem perder velocidade.\n\n"
-
         "🪓 **1) Conjunto Lumberjack**\n"
         "**Bônus Individuais**:\n"
         "• Aumenta a quantidade de madeira coletada.\n"
@@ -101,7 +95,6 @@ def criar_embed_armaduras() -> discord.Embed:
         "• Melhora o dano com machados.\n"
         "• Reduz o consumo de estamina ao correr.\n"
         "**Bônus de Conjunto**: +100% de madeira ao colher com machado e redução de 5% a 30% no custo de estamina ao golpear.\n\n"
-
         "⛪ **2) Conjunto Preacher**\n"
         "**Bônus Individuais**:\n"
         "• Preços de compra mais baratos.\n"
@@ -109,7 +102,6 @@ def criar_embed_armaduras() -> discord.Embed:
         "• Maior dano causado a zumbis.\n"
         "• Ferimentos curam mais rápido.\n"
         "**Bônus de Conjunto**: Reduz a chance de ferimentos críticos e pode até zerar a chance de infecção em Tier máximo!\n\n"
-
         "🕵️ **3) Conjunto Rogue**\n"
         "**Bônus Individuais**:\n"
         "• Saque (loot) mais rápido e com qualidade melhor.\n"
@@ -117,7 +109,6 @@ def criar_embed_armaduras() -> discord.Embed:
         "• Lockpicking mais eficaz (menos tempo e menos quebras de lockpick).\n"
         "• Queda de alturas maiores sem receber dano.\n"
         "**Bônus de Conjunto**: Até +30% de dinheiro e dukes encontrados em loot.\n\n"
-
         "🏃 **4) Conjunto Athletic**\n"
         "**Bônus Individuais**:\n"
         "• Itens de alimentação (comida, bebida, drogas) ficam mais baratos.\n"
@@ -125,18 +116,18 @@ def criar_embed_armaduras() -> discord.Embed:
         "• Aumento de estamina máxima.\n"
         "• Velocidade de corrida melhorada.\n"
         "**Bônus de Conjunto**: Regenerar saúde e estamina consome até 60% menos comida e água.\n\n"
-
         "🔫 **5) Conjunto Enforcer**\n"
         "**Bônus Individuais**:\n"
         "• Melhores preços de compra e venda.\n"
         "• Resistência a ferimentos críticos.\n"
         "• Economia de combustível em veículos.\n"
         "• Velocidade de corrida melhorada.\n"
-        "**Bônus de Conjunto**: Munição .44 causa até +50% de dano e as armas (Magnum/Desert Vulture) recarregam até +50% mais rápido.\n\n"
+        "**Bônus de Conjunto**: Munição .44 causa até +50% de dano e as armas (Magnum/Desert Vulture) recarregam até +50% mais rápido.\n"
+    )
 
+    texto_armaduras_parte2 = (
         "⚔️ **Armaduras Médias**\n"
         "Equilibram defesa e mobilidade, boas para quem quer versatilidade.\n\n"
-
         "🌱 **1) Conjunto Farmer**\n"
         "**Bônus Individuais**:\n"
         "• Chance maior de encontrar sementes em loot.\n"
@@ -144,7 +135,6 @@ def criar_embed_armaduras() -> discord.Embed:
         "• Rifles causam mais dano.\n"
         "• Chance de ganhar sementes extras ao colher.\n"
         "**Bônus de Conjunto**: Comida e bebida curam até +40% de vida adicional.\n\n"
-
         "🏍️ **2) Conjunto Biker**\n"
         "**Bônus Individuais**:\n"
         "• Resistência a atordoamentos.\n"
@@ -152,7 +142,6 @@ def criar_embed_armaduras() -> discord.Embed:
         "• Dano corpo a corpo (melee) aumentado.\n"
         "• Menos estamina gasta ao bater com arma branca.\n"
         "**Bônus de Conjunto**: Garante pontos extras na armadura e reduz gasto de combustível em motos e minibikes.\n\n"
-
         "🔧 **3) Conjunto Scavenger**\n"
         "**Bônus Individuais**:\n"
         "• Mais XP ao desmontar (salvaging).\n"
@@ -160,7 +149,6 @@ def criar_embed_armaduras() -> discord.Embed:
         "• Chance de ganhar recursos extras ao desmontar.\n"
         "• Menos estamina ao usar ferramentas de sucata.\n"
         "**Bônus de Conjunto**: Aumenta a qualidade do loot encontrado (até +20%).\n\n"
-
         "🏹 **4) Conjunto Ranger**\n"
         "**Bônus Individuais**:\n"
         "• Melhores preços em negociações.\n"
@@ -168,7 +156,6 @@ def criar_embed_armaduras() -> discord.Embed:
         "• Maior dano com rifles de ação por alavanca e revolveres.\n"
         "• Mais estamina máxima.\n"
         "**Bônus de Conjunto**: Recarregue rifles de ação por alavanca e revolveres até 50% mais rápido.\n\n"
-
         "💣 **5) Conjunto Commando**\n"
         "**Bônus Individuais**:\n"
         "• Resistência a atordoamentos.\n"
@@ -176,7 +163,6 @@ def criar_embed_armaduras() -> discord.Embed:
         "• Armas de fogo causam dano extra.\n"
         "• Corrida (sprint) mais veloz.\n"
         "**Bônus de Conjunto**: Itens de cura funcionam até 50% mais rápido.\n\n"
-
         "🗡️ **6) Conjunto Assassin**\n"
         "**Bônus Individuais**:\n"
         "• Dano de ataque furtivo (sneak) muito maior.\n"
@@ -184,10 +170,8 @@ def criar_embed_armaduras() -> discord.Embed:
         "• Mais velocidade de ataque com armas de agilidade (facas, arcos, etc.).\n"
         "• Corrida silenciosa ao agachar (sem barulho adicional).\n"
         "**Bônus de Conjunto**: Inimigos desistem de te procurar até 100% mais rápido depois que você some da visão deles.\n\n"
-
         "🛡️ **Armaduras Pesadas**\n"
         "Maior proteção, mas também mais peso e ruído. Boa para quem gosta de combate direto ou precisa de defesa sólida.\n\n"
-
         "⛏️ **1) Conjunto Miner**\n"
         "**Bônus Individuais**:\n"
         "• Mais recursos ao minerar.\n"
@@ -195,7 +179,6 @@ def criar_embed_armaduras() -> discord.Embed:
         "• Quebra de blocos (minério) mais rápida.\n"
         "• Queda de alturas maiores sem dano.\n"
         "**Bônus de Conjunto**: Ferramentas de mineração desgastam até 35% menos.\n\n"
-
         "🏜️ **2) Conjunto Nomad**\n"
         "**Bônus Individuais**:\n"
         "• Regenerar saúde/estamina consome menos comida e água.\n"
@@ -203,7 +186,6 @@ def criar_embed_armaduras() -> discord.Embed:
         "• Dano extra contra zumbis irradiados.\n"
         "• Corrida (sprint) mais rápida.\n"
         "**Bônus de Conjunto**: Reduz ainda mais (até 30%) o custo de comida/água para regenerar.\n\n"
-
         "🧠 **3) Conjunto Nerd**\n"
         "**Bônus Individuais**:\n"
         "• Ganha mais experiência (XP) em tudo.\n"
@@ -211,7 +193,6 @@ def criar_embed_armaduras() -> discord.Embed:
         "• Turrets e cacetes elétricos (batons) causam mais dano.\n"
         "• Maior altura de queda segura.\n"
         "**Bônus de Conjunto**: Todas as ferramentas e armas gastam até 35% menos durabilidade.\n\n"
-
         "💀 **4) Conjunto Raider**\n"
         "**Bônus Individuais**:\n"
         "• Resistência máxima a atordoamentos.\n"
@@ -221,11 +202,8 @@ def criar_embed_armaduras() -> discord.Embed:
         "**Bônus de Conjunto**: Até 45% de resistência a ferimentos críticos.\n"
     )
 
-    embed.add_field(
-        name="Armaduras Detalhadas",
-        value=texto_armaduras,
-        inline=False
-    )
+    embed.add_field(name="Armaduras - Parte 1", value=texto_armaduras_parte1, inline=False)
+    embed.add_field(name="Armaduras - Parte 2", value=texto_armaduras_parte2, inline=False)
 
     embed.set_footer(text="Armaduras de 7 Days to Die • Exemplo de Servidor")
     return embed
@@ -358,6 +336,7 @@ def criar_embed_veiculos() -> discord.Embed:
     embed.set_footer(text="Veículos em 7 Days to Die • Exemplo de Servidor")
     return embed
 
+
 # ===================================================
 # ========== 4) ESTAÇÕES DE TRABALHO =================
 # ===================================================
@@ -368,7 +347,7 @@ KEYWORDS_ESTACOES = [
 ]
 
 def criar_embed_estacoes() -> discord.Embed:
-    """Embed COMPLETO de Estações de Trabalho, usando o texto integral que o usuário forneceu."""
+    """Embed COMPLETO de Estações de Trabalho e Forja."""
     embed = discord.Embed(
         title="⚙️ Estações de Trabalho e Forja",
         description=(
@@ -380,7 +359,7 @@ def criar_embed_estacoes() -> discord.Embed:
 
     texto_intro = (
         "**Introdução**\n"
-        "Quem disse que sobreviver seria fácil? Precisamos nos esforçar para nos mantermos vivos, explorar, "
+        "Quem disse que sobreviver seria fácil? Precisamos nos esforçar para nos manter vivos, explorar, "
         "fazer nossas próprias armas e itens. Nem tudo pode ser feito somente com as mãos...\n"
         "Precisamos de estações de trabalho para cozinhar alimentos, produzir armas, pólvora, ferro, concreto, "
         "e até mesmo obter água.\n\n"
@@ -477,9 +456,9 @@ class PerguntaView(discord.ui.View):
     """
     View genérica: exibe botões "Sim" e "Não".
     - Se clicar em "Sim": envia o embed e apaga a mensagem de pergunta; 1 min depois, apaga o embed.
-    - Se clicar em "Não" ou se der timeout (30s), apaga a mensagem de pergunta e não faz mais nada.
+    - Se clicar em "Não" ou se der timeout (30 min), apaga a mensagem de pergunta e não faz mais nada.
     """
-    def __init__(self, embed: discord.Embed, timeout: float = 30.0, remover_msg_depois: float = 60.0):
+    def __init__(self, embed: discord.Embed, timeout: float = 1800.0, remover_msg_depois: float = 60.0):
         super().__init__(timeout=timeout)
         self.message = None  # Referência à mensagem de pergunta
         self.embed = embed   # Embed que será enviado se clicar em "Sim"
@@ -487,18 +466,18 @@ class PerguntaView(discord.ui.View):
 
     @discord.ui.button(label="Sim", style=discord.ButtonStyle.success)
     async def botao_sim(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Correção aplicada: responde imediatamente com o embed
+        # Responde imediatamente com o embed e deleta a mensagem de pergunta
         await interaction.response.send_message(embed=self.embed)
         if self.message:
             try:
                 await self.message.delete()
-            except:
+            except Exception:
                 pass
         msg_embed = await interaction.original_response()
         await asyncio.sleep(self.remover_msg_depois)
         try:
             await msg_embed.delete()
-        except:
+        except Exception:
             pass
         self.stop()
 
@@ -508,16 +487,16 @@ class PerguntaView(discord.ui.View):
         if self.message:
             try:
                 await self.message.delete()
-            except:
+            except Exception:
                 pass
         self.stop()
 
     async def on_timeout(self):
-        """Se ninguém clicar em nada após 'timeout' (30s), apaga a mensagem de pergunta."""
+        """Se ninguém clicar em nada após o timeout (30 min), apaga a mensagem de pergunta."""
         if self.message:
             try:
                 await self.message.delete()
-            except:
+            except Exception:
                 pass
         self.stop()
 
@@ -531,8 +510,9 @@ class AjudaCompletaCog(commands.Cog):
     - COMANDOS DO SERVIDOR
     - ARMADURAS
     - VEÍCULOS
-    - ESTAÇÕES DE TRABALHO (FORJA, FOGUEIRA, BANCADA, etc.)
-    E, ao encontrar, pergunta se o usuário quer ver. Usa botões "Sim"/"Não".
+    - ESTAÇÕES DE TRABALHO (forja, fogueira, bancada, etc.)
+    E, ao encontrar, pergunta se o usuário quer ver o conteúdo.
+    Usa botões "Sim"/"Não".
     """
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -548,7 +528,7 @@ class AjudaCompletaCog(commands.Cog):
         # 1) COMANDOS
         if any(k in content_lower for k in KEYWORDS_COMANDOS):
             embed_comandos = criar_embed_comandos()
-            view = PerguntaView(embed_comandos, timeout=30.0, remover_msg_depois=60.0)
+            view = PerguntaView(embed_comandos, timeout=1800.0, remover_msg_depois=60.0)
             msg = await message.channel.send(
                 f"{message.author.mention}, deseja ver a lista de COMANDOS do servidor?",
                 view=view
@@ -559,7 +539,7 @@ class AjudaCompletaCog(commands.Cog):
         # 2) ARMADURAS
         if any(k in content_lower for k in KEYWORDS_ARMADURAS):
             embed_armaduras = criar_embed_armaduras()
-            view = PerguntaView(embed_armaduras, timeout=30.0, remover_msg_depois=60.0)
+            view = PerguntaView(embed_armaduras, timeout=1800.0, remover_msg_depois=60.0)
             msg = await message.channel.send(
                 f"{message.author.mention}, deseja ver a lista de ARMADURAS e seus bônus?",
                 view=view
@@ -570,7 +550,7 @@ class AjudaCompletaCog(commands.Cog):
         # 3) VEÍCULOS
         if any(k in content_lower for k in KEYWORDS_VEICULOS):
             embed_veiculos = criar_embed_veiculos()
-            view = PerguntaView(embed_veiculos, timeout=30.0, remover_msg_depois=60.0)
+            view = PerguntaView(embed_veiculos, timeout=1800.0, remover_msg_depois=60.0)
             msg = await message.channel.send(
                 f"{message.author.mention}, deseja ver as informações sobre VEÍCULOS?",
                 view=view
@@ -581,7 +561,7 @@ class AjudaCompletaCog(commands.Cog):
         # 4) ESTAÇÕES DE TRABALHO
         if any(k in content_lower for k in KEYWORDS_ESTACOES):
             embed_estacoes = criar_embed_estacoes()
-            view = PerguntaView(embed_estacoes, timeout=30.0, remover_msg_depois=60.0)
+            view = PerguntaView(embed_estacoes, timeout=1800.0, remover_msg_depois=60.0)
             msg = await message.channel.send(
                 f"{message.author.mention}, deseja ver as ESTAÇÕES DE TRABALHO (forja, fogueira, etc.)?",
                 view=view
