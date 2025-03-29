@@ -17,7 +17,7 @@ COR_ALERTA = discord.Color.yellow()
 ########################################
 # OUTRAS CONFIGURAÇÕES
 ########################################
-WAIT_TIME = 60           # Tempo (segundos) para esperar resposta do usuário
+WAIT_TIME = 90           # Tempo (segundos) para esperar resposta do usuário
 LOG_CHANNEL_ID = 978460787586789406  # ID do canal de logs (opcional; se não quiser logs, defina como 0)
 STAFF_ROLE_ID = 978464190979260426   # ID do cargo da staff (para mention no on_member_update, se desejar)
 NICK_REGEX = re.compile(r'^\[.+\]\s*-\s*.+$')  # Padrão interno: [NomeDoJogo] - NomeDiscord
@@ -29,7 +29,7 @@ class NomeNoCanalCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # Ignora mensagens de bots ou em DMs
+        # Ignora mensagens de bots ou DMs
         if message.author.bot or isinstance(message.channel, discord.DMChannel):
             return
 
@@ -41,22 +41,33 @@ class NomeNoCanalCog(commands.Cog):
         if member.id == guild.owner_id:
             return
 
-        # Se já estiver verificado, não faz nada
+        # Se o usuário digitar "mudar nick", inicia o fluxo de alteração
+        if message.content.lower().strip() == "mudar nick":
+            try:
+                await message.delete()
+            except discord.Forbidden:
+                pass
+            # Apenas usuários verificados podem alterar o nick via esse comando
+            if not await self.is_verified(member):
+                await channel.send(f"{member.mention}, você ainda não está verificado. Por favor, use o processo de verificação normal.")
+                return
+            await self.prompt_mudar_nick(member, channel)
+            return
+
+        # Se já estiver verificado, libera (não intercepta a mensagem)
         if await self.is_verified(member):
             return
 
-        # Apaga a mensagem para evitar poluição
+        # Processo normal de verificação (para usuários não verificados)
         try:
             await message.delete()
         except discord.Forbidden:
             await self.logar(f"[ERRO] Não pude apagar a mensagem de {member} em {channel.mention} (permissão negada).")
 
-        # Se já estamos aguardando resposta deste membro, não repete o pedido
         if member.id in self.waiting_for_name:
             return
         self.waiting_for_name.add(member.id)
 
-        # Cria embed de verificação com os termos
         embed_pedido = discord.Embed(
             title="Verificação Necessária",
             description=(
@@ -65,11 +76,9 @@ class NomeNoCanalCog(commands.Cog):
                 "1. Ao prosseguir, você concorda com as regras do servidor.\n"
                 "2. Se o nome fornecido **não** for realmente o que você usa no jogo, "
                 "**poderá ser banido** tanto do servidor quanto do jogo.\n\n"
-                "Por favor, digite seu nome no jogo e, se desejar, seu nome no Discord "
-                "separados por uma vírgula.\n"
+                "Por favor, digite seu nome no jogo e, se desejar, seu nome no Discord separados por vírgula.\n"
                 "Exemplo: `Jão, Fulano`\n"
-                "Se não quiser alterar seu nome no Discord, basta digitar somente o nome do jogo."
-                f"\nVocê tem {WAIT_TIME} segundos para responder."
+                f"Você tem {WAIT_TIME} segundos para responder."
             ),
             color=COR_PADRAO
         )
@@ -77,7 +86,6 @@ class NomeNoCanalCog(commands.Cog):
 
         pedido_msg = await channel.send(embed=embed_pedido)
 
-        # Aguarda a resposta do usuário no mesmo canal
         def check(m: discord.Message):
             return m.author.id == member.id and m.channel.id == channel.id
 
@@ -94,7 +102,6 @@ class NomeNoCanalCog(commands.Cog):
             )
             timeout_msg = await channel.send(embed=embed_timeout)
             self.waiting_for_name.remove(member.id)
-            # Apaga os embeds de pedido e timeout após 60 segundos
             await asyncio.sleep(60)
             try:
                 await pedido_msg.delete()
@@ -103,24 +110,21 @@ class NomeNoCanalCog(commands.Cog):
                 pass
             return
 
-        # Apaga a resposta do usuário para manter o canal limpo
         try:
             await resposta.delete()
         except discord.Forbidden:
             pass
 
-        # Processa a resposta: divide em duas partes se houver vírgula
+        # Processa a resposta: separa por vírgula se fornecido
         parts = resposta.content.split(',')
         game_name = parts[0].strip()
-        if len(parts) > 1:
+        if len(parts) > 1 and parts[1].strip():
             discord_name = parts[1].strip()
         else:
             discord_name = member.display_name
 
-        # Define o novo apelido utilizando o nome do jogo e o nome do Discord informado ou exibido
         novo_nick = f"[{game_name}] - {discord_name}"
 
-        # Tenta alterar o apelido do usuário
         try:
             await member.edit(nick=novo_nick)
         except discord.Forbidden:
@@ -146,7 +150,6 @@ class NomeNoCanalCog(commands.Cog):
             self.waiting_for_name.remove(member.id)
             return
 
-        # Salva o novo apelido no DB (novo_nick)
         self.salvar_in_game_name(member.id, novo_nick)
 
         embed_sucesso = discord.Embed(
@@ -161,10 +164,114 @@ class NomeNoCanalCog(commands.Cog):
         self.waiting_for_name.remove(member.id)
         await self.logar(f"O usuário {member} definiu seu apelido para '{novo_nick}' e foi verificado.")
 
-        # Aguarda 60 segundos e depois apaga os embeds de pedido e de sucesso
         await asyncio.sleep(60)
         try:
             await pedido_msg.delete()
+            await final_msg.delete()
+        except discord.Forbidden:
+            pass
+
+    async def prompt_mudar_nick(self, member: discord.Member, channel: discord.TextChannel):
+        """
+        Fluxo para mudar o apelido, ativado quando o usuário digitar "mudar nick".
+        """
+        # Se já estamos aguardando resposta desse membro, não repete o pedido
+        if member.id in self.waiting_for_name:
+            return
+        self.waiting_for_name.add(member.id)
+
+        embed_mudar = discord.Embed(
+            title="Mudar Nickname",
+            description=(
+                f"{member.mention}, para alterar seu apelido, digite seu novo nome no jogo e, se desejar, "
+                "seu novo nome no Discord separados por vírgula.\n"
+                "Exemplo: `NovoJogo, NovoNome`\n"
+                f"Você tem {WAIT_TIME} segundos para responder."
+            ),
+            color=COR_PADRAO
+        )
+        embed_mudar.set_footer(text="Sistema de Verificação - Mudar Nickname")
+        mudar_msg = await channel.send(embed=embed_mudar)
+
+        def check(m: discord.Message):
+            return m.author.id == member.id and m.channel.id == channel.id
+
+        try:
+            resposta = await self.bot.wait_for("message", timeout=WAIT_TIME, check=check)
+        except asyncio.TimeoutError:
+            embed_timeout = discord.Embed(
+                title="Tempo Esgotado",
+                description=(
+                    f"{member.mention}, você não respondeu em {WAIT_TIME} segundos para mudar seu apelido.\n"
+                    "Tente novamente enviando 'mudar nick'."
+                ),
+                color=COR_ERRO
+            )
+            timeout_msg = await channel.send(embed=embed_timeout)
+            self.waiting_for_name.remove(member.id)
+            await asyncio.sleep(60)
+            try:
+                await mudar_msg.delete()
+                await timeout_msg.delete()
+            except discord.Forbidden:
+                pass
+            return
+
+        try:
+            await resposta.delete()
+        except discord.Forbidden:
+            pass
+
+        parts = resposta.content.split(',')
+        game_name = parts[0].strip()
+        if len(parts) > 1 and parts[1].strip():
+            discord_name = parts[1].strip()
+        else:
+            discord_name = member.display_name
+
+        novo_nick = f"[{game_name}] - {discord_name}"
+
+        try:
+            await member.edit(nick=novo_nick)
+        except discord.Forbidden:
+            embed_perm = discord.Embed(
+                title="Erro de Permissão",
+                description=(
+                    f"{member.mention}, não consigo alterar seu apelido.\n"
+                    "Fale com um administrador!"
+                ),
+                color=COR_ERRO
+            )
+            perm_msg = await channel.send(embed=embed_perm)
+            self.waiting_for_name.remove(member.id)
+            await asyncio.sleep(60)
+            try:
+                await perm_msg.delete()
+                await mudar_msg.delete()
+            except discord.Forbidden:
+                pass
+            return
+        except Exception as e:
+            await self.logar(f"[ERRO] ao editar apelido de {member}: {e}")
+            self.waiting_for_name.remove(member.id)
+            return
+
+        self.salvar_in_game_name(member.id, novo_nick)
+
+        embed_sucesso = discord.Embed(
+            title="Alteração de Nickname Concluída",
+            description=(
+                f"✅ {member.mention}, seu novo apelido é **`{novo_nick}`**.\n"
+                "Você está liberado para conversar!"
+            ),
+            color=COR_SUCESSO
+        )
+        final_msg = await channel.send(embed=embed_sucesso)
+        self.waiting_for_name.remove(member.id)
+        await self.logar(f"O usuário {member} alterou seu apelido para '{novo_nick}'.")
+        await asyncio.sleep(60)
+        try:
+            await mudar_msg.delete()
             await final_msg.delete()
         except discord.Forbidden:
             pass
