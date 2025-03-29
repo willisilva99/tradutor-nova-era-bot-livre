@@ -4,9 +4,9 @@ import asyncio
 
 from db import SessionLocal, PlayerName
 
-VERIFICATION_CATEGORY_ID = 123456789012345678  # ID da categoria "Verificação"
-ROLE_AGUARDANDO_ID = 234567890123456789       # ID do cargo "Aguardando Verificação"
-LOG_CHANNEL_ID = 345678901234567890           # Canal de logs (opcional)
+VERIFICATION_CATEGORY_ID = 1355588765107880188  # ID da categoria "Verificação"
+ROLE_AGUARDANDO_ID = 1355588895227511027       # ID do cargo "Aguardando Verificação"
+LOG_CHANNEL_ID = 1355589350254968933           # Canal de logs (opcional)
 VERIFICATION_TIMEOUT = 300  # 5 minutos
 APELIDO_REGEX = r'^\[.+\]\s*-\s*.+$'  # Se quiser checar se o apelido está no formato [xxx] - yyy
 
