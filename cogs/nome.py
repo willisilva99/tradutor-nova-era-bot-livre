@@ -18,8 +18,8 @@ COR_ALERTA = discord.Color.yellow()
 # OUTRAS CONFIGURAÇÕES
 ########################################
 WAIT_TIME = 60           # Tempo (segundos) para esperar resposta do usuário
-LOG_CHANNEL_ID = 123456  # ID do canal de logs (opcional; se não quiser logs, deixe 0)
-STAFF_ROLE_ID = 654321   # ID do cargo da staff (para mention no on_member_update, se quiser)
+LOG_CHANNEL_ID = 978460787586789406  # ID do canal de logs (opcional; se não quiser logs, deixe 0)
+STAFF_ROLE_ID = 978464190979260426   # ID do cargo da staff (para mention no on_member_update, se quiser)
 NICK_REGEX = re.compile(r'^\[.+\]\s*-\s*.+$')  # [NomeJogo] - NomeDiscord
 
 class NomeNoCanalCog(commands.Cog):
@@ -39,6 +39,10 @@ class NomeNoCanalCog(commands.Cog):
 
         member = message.author
         channel = message.channel
+
+        # Se for o dono do servidor, ignora
+        if member == member.guild.owner:
+            return
 
         # Se já verificado, libera
         if await self.is_verified(member):
@@ -138,8 +142,12 @@ class NomeNoCanalCog(commands.Cog):
     # -----------------------------------------------------
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
-        if before.bot or after.bot:
+        # Se for dono ou bot, ignora
+        if after.bot:
             return
+        if after == after.guild.owner:
+            return
+
         if before.nick == after.nick:
             return
 
@@ -147,7 +155,6 @@ class NomeNoCanalCog(commands.Cog):
         is_still_verified = (after.nick and NICK_REGEX.match(after.nick))
 
         if was_verified and not is_still_verified:
-            # Alerta no system_channel ou logs
             guild = after.guild
             system_channel = guild.system_channel
             embed_alerta = discord.Embed(
@@ -161,16 +168,9 @@ class NomeNoCanalCog(commands.Cog):
             if system_channel:
                 await system_channel.send(embed=embed_alerta)
 
-            # Mencionar staff, se quiser
             staff_role = guild.get_role(STAFF_ROLE_ID)
-            if staff_role:
+            if staff_role and system_channel:
                 await system_channel.send(f"{staff_role.mention}, fiquem de olho.")
-
-            # Se quiser banir ou reverter
-            # try:
-            #     await after.edit(nick=before.nick)
-            # except discord.Forbidden:
-            #     pass
 
             await self.logar(f"Usuário {after} removeu prefixo. Nick era '{before.nick}' e virou '{after.nick}'.")
 
@@ -202,9 +202,7 @@ class NomeNoCanalCog(commands.Cog):
             reg = session.query(PlayerName).filter_by(discord_id=str(discord_id)).first()
             if reg:
                 reg.in_game_name = in_game_name
-                # updated_at é automático se no db.py estiver `onupdate=datetime.utcnow`
             else:
-                # registramos data/hora pela 1ª vez
                 novo = PlayerName(discord_id=str(discord_id), in_game_name=in_game_name)
                 session.add(novo)
             session.commit()
@@ -222,7 +220,7 @@ class NomeNoCanalCog(commands.Cog):
         Envia logs para LOG_CHANNEL_ID, se configurado.
         """
         if not LOG_CHANNEL_ID:
-            return  # Se não definiu, não faz nada
+            return
         channel = self.bot.get_channel(LOG_CHANNEL_ID)
         if channel:
             try:
