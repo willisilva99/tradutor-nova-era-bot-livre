@@ -1,210 +1,146 @@
-import re
 import discord
 from discord.ext import commands
 import asyncio
 
-# Para slash commands no discord.py 2.0, usamos 'app_commands'
-from discord import app_commands
+# Importe sua configuração de DB
+from db import SessionLocal, PlayerName
 
-from db import SessionLocal, PlayerName  # Ajuste se o modelo PlayerName estiver em outro arquivo
+# IDs que você precisa ajustar no seu servidor:
+VERIFICATION_CATEGORY_ID = 123456789012345678  # ID da categoria "Verificação"
+ROLE_AGUARDANDO_ID = 234567890123456789       # ID do cargo "Aguardando Verificação"
+LOG_CHANNEL_ID = 345678901234567890           # Opcional: canal de logs
 
-# ID do canal de logs (opcional). Se não usar logs, pode remover.
-LOG_CHANNEL_ID = 978460787586789406
+# Tempo de espera (em segundos) para o usuário responder. Ex: 300 = 5 minutos
+VERIFICATION_TIMEOUT = 300
 
 class NomeCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Regex para checar formato: [nome] - nome
-        self.pattern = re.compile(r'^\[.+\]\s*-\s*.+$')
-        self.verificados = set()  # Cache local
-        self.currently_restoring = set()  # Evitar loop ao restaurar apelido
+        # Dicionário para mapear qual canal pertence a qual usuário
+        # { member_id: channel_id }
+        self.verification_channels = {}
 
-    # ====================================================
-    # 1) Slash Command usando app_commands
-    # ====================================================
-    @app_commands.command(name="setnome", description="Defina ou atualize seu nome no jogo.")
-    async def set_nome(self, interaction: discord.Interaction, nome_do_jogo: str):
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member):
         """
-        Permite que o usuário ajuste manualmente seu [NomeDoJogo] - NomeDiscord.
-        Com o 'app_commands.command', este é um slash command.
+        Quando um usuário entra:
+         - Dá cargo "Aguardando Verificação"
+         - Cria um canal de verificação
+         - Pede o nome do jogo
         """
-        member = interaction.user
         if member.bot:
-            await interaction.response.send_message("Bots não precisam de apelido!", ephemeral=True)
             return
 
-        novo_nick = f"[{nome_do_jogo}] - {member.name}"
+        # 1) Atribuir cargo "Aguardando Verificação"
+        role = member.guild.get_role(ROLE_AGUARDANDO_ID)
+        if role:
+            try:
+                await member.add_roles(role, reason="Usuário aguardando verificação.")
+            except discord.Forbidden:
+                print(f"[ERRO] Sem permissão para atribuir cargo ao {member}.")
+            except Exception as e:
+                print(f"[ERRO] ao atribuir cargo: {e}")
+
+        # 2) Criar canal de verificação
+        try:
+            verification_cat = self.bot.get_channel(VERIFICATION_CATEGORY_ID)
+            if not verification_cat or not isinstance(verification_cat, discord.CategoryChannel):
+                print("[ERRO] A categoria de verificação não foi encontrada ou não é CategoryChannel.")
+                return
+
+            channel_name = f"verificacao-{member.name.lower().replace(' ', '-')}"
+            # Permissões específicas: só o user, o bot (e staff se quiser) podem ver.
+            overwrites = {
+                member.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                self.bot.user: discord.PermissionOverwrite(view_channel=True, send_messages=True)
+                # Se quiser staff ver, adicione aqui a role da staff
+                # ex.: staff_role: discord.PermissionOverwrite(view_channel=True, send_messages=True)
+            }
+
+            # Cria o canal
+            channel = await verification_cat.create_text_channel(
+                name=channel_name,
+                overwrites=overwrites,
+                reason="Canal temporário de verificação"
+            )
+            self.verification_channels[member.id] = channel.id
+
+            # 3) Mensagem de boas-vindas no canal
+            msg_intro = (
+                f"Olá {member.mention}! "
+                "Bem-vindo ao servidor. Antes de participar, preciso do seu **nome no jogo**.\n\n"
+                f"Digite aqui seu nome no jogo dentro de {VERIFICATION_TIMEOUT//60} minutos. "
+                "Depois disso, este canal será removido!"
+            )
+            await channel.send(msg_intro)
+
+            # 4) Esperar resposta
+            await self.aguardar_resposta(member, channel)
+
+        except Exception as e:
+            print(f"[ERRO] ao criar canal de verificação para {member}: {e}")
+
+    async def aguardar_resposta(self, member: discord.Member, channel: discord.TextChannel):
+        """
+        Espera pelo nome do jogo do usuário no canal de verificação.
+        Se der timeout, deleta o canal.
+        Caso contrário, seta o apelido e remove cargo.
+        """
+        def check(m: discord.Message):
+            return m.channel.id == channel.id and m.author.id == member.id
+        
+        try:
+            resposta = await self.bot.wait_for('message', timeout=VERIFICATION_TIMEOUT, check=check)
+        except asyncio.TimeoutError:
+            # Se o usuário não respondeu
+            await channel.send("Tempo esgotado! Você não forneceu seu nome. Este canal será excluído.")
+            await asyncio.sleep(5)
+            await channel.delete(reason="Tempo de verificação esgotado.")
+            return
+
+        # O usuário mandou algo
+        in_game_name = resposta.content.strip()
+        novo_nick = f"[{in_game_name}] - {member.name}"
+
+        # Tenta editar apelido
         try:
             await member.edit(nick=novo_nick)
         except discord.Forbidden:
-            await interaction.response.send_message(
-                "Não tenho permissão para alterar seu apelido. Verifique se meu cargo está acima do seu!",
-                ephemeral=True
+            await channel.send(
+                "Não tenho permissão para alterar seu apelido. "
+                "Contate um administrador!"
             )
             return
 
         # Salvar no banco
-        self.salvar_in_game_name(member.id, nome_do_jogo)
-        # Adicionar ao cache
-        self.verificados.add(member.id)
-
-        # Resposta no canal de slash (geralmente ephemeral)
-        await interaction.response.send_message(
-            f"Apelido atualizado para `{novo_nick}` com sucesso!",
-            ephemeral=True
-        )
-
-        # Log opcional
-        await self.logar(f"**/setnome** usado por {member.mention}: agora é `{novo_nick}`.")
-
-    # ====================================================
-    # 2) Quando um membro entra, verificar apelido
-    # ====================================================
-    @commands.Cog.listener()
-    async def on_member_join(self, member: discord.Member):
-        if member.bot:
-            return
-
-        if member.nick and self.pattern.match(member.nick):
-            self.verificados.add(member.id)
-        else:
-            await self.solicitar_nome_jogo(member)
-
-    # ====================================================
-    # 3) Detectar mudança de apelido e manter formato
-    # ====================================================
-    @commands.Cog.listener()
-    async def on_member_update(self, before: discord.Member, after: discord.Member):
-        if before.bot or after.bot:
-            return
-
-        if before.nick == after.nick:
-            return  # não mudou nada
-
-        # Se já estamos restaurando, não faz nada
-        if after.id in self.currently_restoring:
-            return
-
-        # Se o novo apelido ainda combina com o padrão, marca como verificado
-        if after.nick and self.pattern.match(after.nick):
-            self.verificados.add(after.id)
-        else:
-            # Avisar via DM
-            try:
-                await after.send(
-                    "⚠️ Você alterou seu apelido e ele não está mais no formato "
-                    "`[NomeDoJogo] - NomeDiscord`. Por favor, mantenha o formato correto."
-                )
-            except discord.Forbidden:
-                pass
-
-            await self.logar(
-                f"{after.mention} removeu o formato do apelido. Antes: `{before.nick}`, depois: `{after.nick}`"
-            )
-
-            # Se quiser forçar a restauração (cuidado com loop infinito):
-            if before.nick and self.pattern.match(before.nick):
-                self.currently_restoring.add(after.id)
-                try:
-                    await after.edit(nick=before.nick)
-                except discord.Forbidden:
-                    pass
-                self.currently_restoring.remove(after.id)
-
-    # ====================================================
-    # 4) on_message otimizado com cache
-    # ====================================================
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        if message.author.bot:
-            return
-        if isinstance(message.channel, discord.DMChannel):
-            return
-
-        member = message.author
-
-        # Se já está verificado no cache, não precisa checar
-        if member.id in self.verificados:
-            return
-
-        # Caso contrário, checa se o apelido confere. Se sim, marca verificado
-        if member.nick and self.pattern.match(member.nick):
-            self.verificados.add(member.id)
-        else:
-            # Apaga a mensagem e avisa
-            try:
-                await message.delete()
-            except discord.Forbidden:
-                pass
-
-            # Tenta mandar DM
-            dm_enviado = await self.tentar_enviar_dm(member)
-            if dm_enviado:
-                await self.logar(f"Mensagem de {member.mention} apagada (apelido fora do formato).")
-            else:
-                await self.logar(
-                    f"Não pude mandar DM para {member.mention}. Mensagem apagada (apelido fora do formato)."
-                )
-
-    # ====================================================
-    # 5) Perguntar nome do jogo (DM)
-    # ====================================================
-    async def solicitar_nome_jogo(self, member: discord.Member):
-        try:
-            dm_channel = await member.create_dm()
-            await dm_channel.send(
-                "Olá! Percebi que você não está com seu apelido no formato `[NomeDoJogo] - NomeDiscord`.\n"
-                "Por favor, me diga agora: **qual é seu nome no jogo?**"
-            )
-        except discord.Forbidden:
-            await self.logar(f"Não pude DM {member.mention} (verificação de apelido falhou).")
-            return
-
-        def check(m: discord.Message):
-            return m.author == member and m.channel == dm_channel
-
-        try:
-            resposta = await self.bot.wait_for("message", timeout=60.0, check=check)
-        except asyncio.TimeoutError:
-            await dm_channel.send("Você não respondeu a tempo. Tente novamente mais tarde!")
-            return
-
-        in_game_name = resposta.content.strip()
-        novo_nick = f"[{in_game_name}] - {member.name}"
-
-        # Tenta editar o apelido
-        try:
-            await member.edit(nick=novo_nick)
-        except discord.Forbidden:
-            await dm_channel.send("Não tenho permissão para alterar seu apelido. Contate um administrador!")
-            return
-
-        # Salva no banco e marca como verificado
         self.salvar_in_game_name(member.id, in_game_name)
-        self.verificados.add(member.id)
 
-        await dm_channel.send(f"✅ Seu apelido foi atualizado para `{novo_nick}`. Obrigado!")
-        await self.logar(f"{member.mention} teve o apelido configurado para `{novo_nick}`.")
+        # Remove o cargo "Aguardando Verificação"
+        role = member.guild.get_role(ROLE_AGUARDANDO_ID)
+        if role in member.roles:
+            try:
+                await member.remove_roles(role, reason="Usuário verificado com sucesso.")
+            except discord.Forbidden:
+                pass
 
-    # ====================================================
-    # 6) Auxiliar: enviar DM pedindo pra definir apelido
-    # ====================================================
-    async def tentar_enviar_dm(self, member: discord.Member) -> bool:
-        try:
-            dm_channel = await member.create_dm()
-            await dm_channel.send(
-                "❌ Você não pode enviar mensagens no servidor sem definir seu apelido "
-                "no formato `[NomeDoJogo] - NomeDiscord`.\n\n"
-                "Qual é seu nome no jogo?"
-            )
-            return True
-        except discord.Forbidden:
-            return False
+        await channel.send(
+            f"✅ Obrigado, {member.mention}! Seu apelido foi atualizado para `{novo_nick}`. "
+            "Você já pode participar do servidor. Apagaremos este canal em 5 segundos..."
+        )
+        # Espera uns segundos e deleta o canal
+        await asyncio.sleep(5)
+        await channel.delete(reason="Verificação concluída.")
 
-    # ====================================================
-    # 7) Salvar no banco de dados
-    # ====================================================
+        # Remover do dicionário local
+        if member.id in self.verification_channels:
+            del self.verification_channels[member.id]
+
+        # Logar, se desejar
+        await self.logar(f"O usuário {member} foi verificado como '{in_game_name}' e canal de verificação removido.")
+
     def salvar_in_game_name(self, discord_id: int, in_game_name: str):
+        """Salva ou atualiza o nome no jogo no DB."""
         session = SessionLocal()
         try:
             registro = session.query(PlayerName).filter_by(discord_id=str(discord_id)).first()
@@ -220,23 +156,15 @@ class NomeCog(commands.Cog):
         finally:
             session.close()
 
-    # ====================================================
-    # 8) Logar ações em canal staff
-    # ====================================================
     async def logar(self, mensagem: str):
-        channel = self.bot.get_channel(LOG_CHANNEL_ID)
-        if channel is not None:
-            try:
-                await channel.send(mensagem)
-            except discord.Forbidden:
-                pass
+        """Opcional: envia logs de verificação para um canal staff."""
+        if LOG_CHANNEL_ID:
+            channel = self.bot.get_channel(LOG_CHANNEL_ID)
+            if channel:
+                try:
+                    await channel.send(mensagem)
+                except discord.Forbidden:
+                    pass
 
 async def setup(bot: commands.Bot):
-    # Adiciona a Cog
     await bot.add_cog(NomeCog(bot))
-    # Opcional: Se quiser forçar sincronizar
-    # try:
-    #     synced = await bot.tree.sync()
-    #     print(f"Slash commands sincronizados! ({len(synced)}) comandos.")
-    # except Exception as e:
-    #     print(f"Erro ao sincronizar slash commands: {e}")
