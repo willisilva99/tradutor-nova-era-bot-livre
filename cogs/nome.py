@@ -2,50 +2,59 @@ import re
 import discord
 from discord.ext import commands
 import asyncio
-from typing import Optional
+
+# Para slash commands no discord.py 2.0, usamos 'app_commands'
+from discord import app_commands
 
 from db import SessionLocal, PlayerName  # Ajuste se o modelo PlayerName estiver em outro arquivo
 
 # ID do canal de logs (opcional). Se não usar logs, pode remover.
-LOG_CHANNEL_ID = 123456789012345678  # Substitua pelo canal de staff/logs do seu servidor
+LOG_CHANNEL_ID = 978460787586789406
 
 class NomeCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Regex para checar formato: [...] - ...
+        # Regex para checar formato: [nome] - nome
         self.pattern = re.compile(r'^\[.+\]\s*-\s*.+$')
-        # Cache local para armazenar quem já está verificado
-        # Evita checar o apelido toda hora no on_message
-        self.verificados = set()
-        # Set para evitar loop ao restaurar nickname
-        self.currently_restoring = set()
+        self.verificados = set()  # Cache local
+        self.currently_restoring = set()  # Evitar loop ao restaurar apelido
 
     # ====================================================
-    # 1) Comando Slash para definir nome do jogo manualmente
+    # 1) Slash Command usando app_commands
     # ====================================================
-    @commands.slash_command(name="setnome", description="Defina ou atualize seu nome no jogo.")
-    async def set_nome(self, ctx: discord.ApplicationContext, nome_do_jogo: str):
-        """Permite que o usuário ajuste manualmente seu [NomeDoJogo] - NomeDiscord."""
-        member = ctx.author
+    @app_commands.command(name="setnome", description="Defina ou atualize seu nome no jogo.")
+    async def set_nome(self, interaction: discord.Interaction, nome_do_jogo: str):
+        """
+        Permite que o usuário ajuste manualmente seu [NomeDoJogo] - NomeDiscord.
+        Com o 'app_commands.command', este é um slash command.
+        """
+        member = interaction.user
         if member.bot:
-            return  # ignora bots
+            await interaction.response.send_message("Bots não precisam de apelido!", ephemeral=True)
+            return
 
         novo_nick = f"[{nome_do_jogo}] - {member.name}"
         try:
             await member.edit(nick=novo_nick)
         except discord.Forbidden:
-            await ctx.respond(
+            await interaction.response.send_message(
                 "Não tenho permissão para alterar seu apelido. Verifique se meu cargo está acima do seu!",
                 ephemeral=True
             )
             return
-        
+
         # Salvar no banco
         self.salvar_in_game_name(member.id, nome_do_jogo)
         # Adicionar ao cache
         self.verificados.add(member.id)
-        
-        await ctx.respond(f"Apelido atualizado para `{novo_nick}` com sucesso!", ephemeral=True)
+
+        # Resposta no canal de slash (geralmente ephemeral)
+        await interaction.response.send_message(
+            f"Apelido atualizado para `{novo_nick}` com sucesso!",
+            ephemeral=True
+        )
+
+        # Log opcional
         await self.logar(f"**/setnome** usado por {member.mention}: agora é `{novo_nick}`.")
 
     # ====================================================
@@ -53,11 +62,9 @@ class NomeCog(commands.Cog):
     # ====================================================
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        """Quando o usuário entra, verificar se já tem o formato [xxx] - yyy."""
         if member.bot:
             return
 
-        # Se tiver no formato, adiciona no cache; senão, solicita.
         if member.nick and self.pattern.match(member.nick):
             self.verificados.add(member.id)
         else:
@@ -68,7 +75,6 @@ class NomeCog(commands.Cog):
     # ====================================================
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
-        """Se o membro alterar o apelido e remover [xxx] - yyy, avisar ou restaurar."""
         if before.bot or after.bot:
             return
 
@@ -92,17 +98,17 @@ class NomeCog(commands.Cog):
             except discord.Forbidden:
                 pass
 
-            await self.logar(f"{after.mention} removeu o formato do apelido. Antes: `{before.nick}`, depois: `{after.nick}`")
+            await self.logar(
+                f"{after.mention} removeu o formato do apelido. Antes: `{before.nick}`, depois: `{after.nick}`"
+            )
 
-            # Se quiser forçar a restauração:
-            # (Cuidado pra não criar loop infinito)
+            # Se quiser forçar a restauração (cuidado com loop infinito):
             if before.nick and self.pattern.match(before.nick):
                 self.currently_restoring.add(after.id)
                 try:
                     await after.edit(nick=before.nick)
                 except discord.Forbidden:
                     pass
-                # Remover do set após restaurar
                 self.currently_restoring.remove(after.id)
 
     # ====================================================
@@ -110,14 +116,13 @@ class NomeCog(commands.Cog):
     # ====================================================
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        """Apaga mensagem se não tiver no formato, usando cache para otimizar."""
         if message.author.bot:
             return
         if isinstance(message.channel, discord.DMChannel):
             return
 
         member = message.author
-        
+
         # Se já está verificado no cache, não precisa checar
         if member.id in self.verificados:
             return
@@ -126,7 +131,7 @@ class NomeCog(commands.Cog):
         if member.nick and self.pattern.match(member.nick):
             self.verificados.add(member.id)
         else:
-            # Apagar a mensagem e avisar
+            # Apaga a mensagem e avisa
             try:
                 await message.delete()
             except discord.Forbidden:
@@ -142,14 +147,9 @@ class NomeCog(commands.Cog):
                 )
 
     # ====================================================
-    # 5) Função auxiliar: perguntar nome do jogo (DM)
+    # 5) Perguntar nome do jogo (DM)
     # ====================================================
     async def solicitar_nome_jogo(self, member: discord.Member):
-        """
-        Envia DM perguntando o nome do jogo e ajusta [NomeDoJogo] - NomeDiscord.
-        Se DM falhar, pode tentar um canal de verificação.
-        """
-        # Tenta DM
         try:
             dm_channel = await member.create_dm()
             await dm_channel.send(
@@ -157,8 +157,7 @@ class NomeCog(commands.Cog):
                 "Por favor, me diga agora: **qual é seu nome no jogo?**"
             )
         except discord.Forbidden:
-            # Se falhar, podemos tentar um canal de verificação (se quiser)
-            await self.logar(f"Não pude DM {member.mention}. Você pode criar um canal de verificação.")
+            await self.logar(f"Não pude DM {member.mention} (verificação de apelido falhou).")
             return
 
         def check(m: discord.Message):
@@ -191,7 +190,6 @@ class NomeCog(commands.Cog):
     # 6) Auxiliar: enviar DM pedindo pra definir apelido
     # ====================================================
     async def tentar_enviar_dm(self, member: discord.Member) -> bool:
-        """Tenta enviar DM pedindo nome do jogo. Retorna True se conseguiu enviar."""
         try:
             dm_channel = await member.create_dm()
             await dm_channel.send(
@@ -207,7 +205,6 @@ class NomeCog(commands.Cog):
     # 7) Salvar no banco de dados
     # ====================================================
     def salvar_in_game_name(self, discord_id: int, in_game_name: str):
-        """Insere/atualiza in_game_name no banco."""
         session = SessionLocal()
         try:
             registro = session.query(PlayerName).filter_by(discord_id=str(discord_id)).first()
@@ -216,7 +213,6 @@ class NomeCog(commands.Cog):
             else:
                 novo = PlayerName(discord_id=str(discord_id), in_game_name=in_game_name)
                 session.add(novo)
-
             session.commit()
         except Exception as e:
             session.rollback()
@@ -228,7 +224,6 @@ class NomeCog(commands.Cog):
     # 8) Logar ações em canal staff
     # ====================================================
     async def logar(self, mensagem: str):
-        """Envia logs para um canal de staff (caso LOG_CHANNEL_ID esteja definido)."""
         channel = self.bot.get_channel(LOG_CHANNEL_ID)
         if channel is not None:
             try:
@@ -237,4 +232,11 @@ class NomeCog(commands.Cog):
                 pass
 
 async def setup(bot: commands.Bot):
+    # Adiciona a Cog
     await bot.add_cog(NomeCog(bot))
+    # Opcional: Se quiser forçar sincronizar
+    # try:
+    #     synced = await bot.tree.sync()
+    #     print(f"Slash commands sincronizados! ({len(synced)}) comandos.")
+    # except Exception as e:
+    #     print(f"Erro ao sincronizar slash commands: {e}")
