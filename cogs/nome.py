@@ -6,9 +6,9 @@ import asyncio
 from db import SessionLocal, PlayerName
 
 # IDs que você precisa ajustar no seu servidor:
-VERIFICATION_CATEGORY_ID = 123456789012345678  # ID da categoria "Verificação"
-ROLE_AGUARDANDO_ID = 234567890123456789       # ID do cargo "Aguardando Verificação"
-LOG_CHANNEL_ID = 345678901234567890           # Opcional: canal de logs
+VERIFICATION_CATEGORY_ID = 1355588765107880188  # ID da categoria "Verificação"
+ROLE_AGUARDANDO_ID = 1355588895227511027       # ID do cargo "Aguardando Verificação"
+LOG_CHANNEL_ID = 1355589350254968933           # Opcional: canal de logs
 
 # Tempo de espera (em segundos) para o usuário responder. Ex: 300 = 5 minutos
 VERIFICATION_TIMEOUT = 300
