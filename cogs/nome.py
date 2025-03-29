@@ -4,81 +4,99 @@ import asyncio
 
 from db import SessionLocal, PlayerName
 
-###########################
-# CONFIGURAÇÕES
-###########################
-VERIFICATION_CATEGORY_ID = 1355588765107880188  # ID da categoria "Verificação"
-ROLE_AGUARDANDO_ID = 1355588895227511027       # ID do cargo "Aguardando Verificação"
-LOG_CHANNEL_ID = 1355589350254968933           # Canal de logs (opcional)
-VERIFICATION_TIMEOUT = 300                     # Tempo em segundos (5min)
+VERIFICATION_CATEGORY_ID = 123456789012345678  # ID da categoria "Verificação"
+ROLE_AGUARDANDO_ID = 234567890123456789       # ID do cargo "Aguardando Verificação"
+LOG_CHANNEL_ID = 345678901234567890           # Canal de logs (opcional)
+VERIFICATION_TIMEOUT = 300  # 5 minutos
+APELIDO_REGEX = r'^\[.+\]\s*-\s*.+$'  # Se quiser checar se o apelido está no formato [xxx] - yyy
 
 class NomeCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Armazena {member_id: channel_id} caso precise
         self.verification_channels = {}
 
     @commands.Cog.listener()
     async def on_ready(self):
         """
-        Evento chamado quando o bot termina de inicializar.
-        Vamos apenas imprimir que tudo está ok e
-        checar se a categoria e o cargo de verificação existem.
+        Quando o bot estiver pronto:
+        1) Verifica IDs de categoria/cargo.
+        2) Opcional: chama a função para varrer membros já existentes.
         """
-        print("[DEBUG] NomeCog está pronto. Verificando IDs...")
+        print("NomeCog está pronto. Fazendo verificação de membros existentes...")
 
-        # Vamos checar se a categoria existe
-        cat = self.bot.get_channel(VERIFICATION_CATEGORY_ID)
-        if cat is None:
-            print(f"[ERRO] Categoria com ID={VERIFICATION_CATEGORY_ID} não encontrada!")
-        else:
-            if isinstance(cat, discord.CategoryChannel):
-                print(f"[DEBUG] Categoria '{cat.name}' (ID={cat.id}) encontrada.")
-            else:
-                print(f"[ERRO] Objeto com ID={VERIFICATION_CATEGORY_ID} não é uma CategoryChannel.")
-
-        # Verificar se o cargo existe em pelo menos um servidor
-        role_found = False
+        # Chama a função para checar cada membro do(s) servidor(es)
+        # Se seu bot estiver em vários servidores, você pode escolher só um.
         for guild in self.bot.guilds:
-            role = guild.get_role(ROLE_AGUARDANDO_ID)
-            if role is not None:
-                print(f"[DEBUG] Cargo '{role.name}' (ID={role.id}) encontrado no servidor '{guild.name}'.")
-                role_found = True
-        if not role_found:
-            print(f"[ERRO] Cargo com ID={ROLE_AGUARDANDO_ID} não foi encontrado em nenhum servidor.")
+            await self.verificar_existentes(guild)
 
-    @commands.Cog.listener()
-    async def on_member_join(self, member: discord.Member):
+    async def verificar_existentes(self, guild: discord.Guild):
         """
-        Quando um usuário entra no servidor, damos cargo "Aguardando Verificação",
-        criamos um canal temporário para ele e pedimos o nome do jogo.
+        Escaneia todos os membros do servidor.
+        Se não estiverem no DB ou apelido fora do formato,
+        atribui cargo "Aguardando Verificação" e cria canal.
         """
-        if member.bot:
+        print(f"[DEBUG] Verificando membros existentes no servidor: {guild.name} (ID={guild.id})")
+
+        # Pega cargo
+        role = guild.get_role(ROLE_AGUARDANDO_ID)
+        if not role:
+            print(f"[ERRO] Cargo com ID={ROLE_AGUARDANDO_ID} não encontrado em {guild.name}.")
             return
 
-        print(f"[DEBUG] on_member_join: {member} entrou no servidor {member.guild.name}.")
-
-        # Atribuir cargo
-        role = member.guild.get_role(ROLE_AGUARDANDO_ID)
-        if role:
-            try:
-                await member.add_roles(role, reason="Usuário aguardando verificação.")
-                print(f"[DEBUG] Cargo '{role.name}' adicionado a {member}.")
-            except discord.Forbidden:
-                print(f"[ERRO] Sem permissão para atribuir cargo '{role.name}' ao {member}.")
-            except Exception as e:
-                print(f"[ERRO] ao atribuir cargo '{role.name}': {e}")
-        else:
-            print(f"[ERRO] Role ID={ROLE_AGUARDANDO_ID} não encontrado no guild '{member.guild.name}'.")
-
-        # Criar canal de verificação
-        verification_cat = self.bot.get_channel(VERIFICATION_CATEGORY_ID)
-        if not verification_cat:
-            print(f"[ERRO] Categoria ID={VERIFICATION_CATEGORY_ID} não encontrada.")
+        # Pega categoria
+        category = self.bot.get_channel(VERIFICATION_CATEGORY_ID)
+        if not category or not isinstance(category, discord.CategoryChannel):
+            print(f"[ERRO] Categoria com ID={VERIFICATION_CATEGORY_ID} não encontrada.")
             return
-        if not isinstance(verification_cat, discord.CategoryChannel):
-            print(f"[ERRO] Objeto ID={VERIFICATION_CATEGORY_ID} não é CategoryChannel.")
-            return
+
+        # Carrega do DB quem já tem registro
+        session = SessionLocal()
+        try:
+            registrados = session.query(PlayerName.discord_id).all()
+            registrados_ids = {r[0] for r in registrados}  # set de strings
+        finally:
+            session.close()
+
+        # Para cada membro, checa se precisa verificação
+        for member in guild.members:
+            if member.bot:
+                continue
+
+            # Se já tem ID no DB, e o apelido bate o formato, ignora
+            ja_registrado = str(member.id) in registrados_ids
+
+            nick_ok = False
+            if member.nick:
+                import re
+                nick_ok = re.match(APELIDO_REGEX, member.nick) is not None
+
+            if ja_registrado and nick_ok:
+                continue  # esse está ok
+
+            # Se chegou aqui, precisa verificação
+            print(f"[DEBUG] Membro {member} precisa verificação. Registrado? {ja_registrado}, NickOK? {nick_ok}")
+
+            # Dá cargo e cria canal (se ainda não tiver canal de verificação)
+            if role not in member.roles:
+                try:
+                    await member.add_roles(role, reason="Usuário necessita verificação.")
+                except discord.Forbidden:
+                    print(f"[ERRO] Sem permissão para atribuir cargo '{role.name}' ao {member}.")
+
+            # Cria canal, se não existir ainda
+            await self.criar_canal_verificacao(member, category)
+
+    async def criar_canal_verificacao(self, member: discord.Member, category: discord.CategoryChannel):
+        """
+        Cria o canal temporário de verificação para um membro.
+        """
+        # Checa se já criamos um canal para este membro
+        if member.id in self.verification_channels:
+            # Já temos um canal para ele; talvez não precise criar outro
+            channel_id = self.verification_channels[member.id]
+            if self.bot.get_channel(channel_id):
+                print(f"[DEBUG] Canal de verificação já existe para {member}.")
+                return
 
         channel_name = f"verificacao-{member.name.lower().replace(' ', '-')}"
         overwrites = {
@@ -88,41 +106,34 @@ class NomeCog(commands.Cog):
         }
 
         try:
-            verification_channel = await verification_cat.create_text_channel(
+            verification_channel = await category.create_text_channel(
                 name=channel_name,
                 overwrites=overwrites,
-                reason="Canal temporário de verificação"
+                reason="Canal temporário de verificação (membro existente)."
             )
             self.verification_channels[member.id] = verification_channel.id
-            print(f"[DEBUG] Canal de verificação criado: {verification_channel.name} (ID={verification_channel.id}) para {member}.")
+            print(f"[DEBUG] Canal de verificação criado: {verification_channel.name} para {member}.")
 
             msg_intro = (
-                f"Olá {member.mention}!\n"
-                "Bem-vindo ao servidor. Antes de participar, preciso do seu **nome no jogo**.\n\n"
-                f"Digite aqui seu nome no jogo dentro de {VERIFICATION_TIMEOUT//60} minutos. "
-                "Depois disso, este canal será removido!"
+                f"Olá {member.mention}! Você ainda não está verificado.\n"
+                "Por favor, digite aqui seu **nome no jogo** em até 5 minutos. "
+                "Depois disso, este canal será removido."
             )
             await verification_channel.send(msg_intro)
 
-            # Esperar a resposta do usuário
+            # Esperar resposta
             await self.aguardar_resposta(member, verification_channel)
 
         except Exception as e:
             print(f"[ERRO] ao criar canal de verificação para {member}: {e}")
 
     async def aguardar_resposta(self, member: discord.Member, channel: discord.TextChannel):
-        """
-        Espera a mensagem do usuário no canal 'channel'.
-        Se o tempo expirar, deleta o canal.
-        Se chegar, define apelido, salva no DB e remove cargo.
-        """
         def check(m: discord.Message):
             return m.channel.id == channel.id and m.author.id == member.id
 
         try:
             resposta = await self.bot.wait_for("message", timeout=VERIFICATION_TIMEOUT, check=check)
         except asyncio.TimeoutError:
-            print(f"[DEBUG] Tempo esgotado para {member}, canal {channel.name}. Excluindo canal.")
             await channel.send("Tempo esgotado! Você não forneceu seu nome. Este canal será excluído.")
             await asyncio.sleep(5)
             await channel.delete(reason="Tempo de verificação esgotado.")
@@ -130,56 +141,36 @@ class NomeCog(commands.Cog):
 
         in_game_name = resposta.content.strip()
         novo_nick = f"[{in_game_name}] - {member.name}"
-
-        print(f"[DEBUG] {member} informou nome no jogo: '{in_game_name}'. Tentando editar apelido para '{novo_nick}'.")
-
-        # Tenta editar o apelido
         try:
             await member.edit(nick=novo_nick)
-            print(f"[DEBUG] Apelido de {member} alterado para '{novo_nick}'.")
         except discord.Forbidden:
             await channel.send("Não tenho permissão para alterar seu apelido. Contate um administrador!")
-            print(f"[ERRO] Permissão negada para editar apelido de {member}.")
-            return
-        except Exception as e:
-            print(f"[ERRO] ao editar apelido de {member}: {e}")
             return
 
-        # Salva no DB
+        # Salvar no DB
         self.salvar_in_game_name(member.id, in_game_name)
 
-        # Remove cargo "Aguardando Verificação"
+        # Remove cargo
         role = member.guild.get_role(ROLE_AGUARDANDO_ID)
         if role in member.roles:
             try:
                 await member.remove_roles(role, reason="Usuário verificado com sucesso.")
-                print(f"[DEBUG] Removido cargo '{role.name}' de {member}.")
             except discord.Forbidden:
-                print(f"[ERRO] Permissão negada para remover cargo '{role.name}' de {member}.")
-            except Exception as e:
-                print(f"[ERRO] ao remover cargo '{role.name}': {e}")
+                pass
 
         await channel.send(
-            f"✅ Obrigado, {member.mention}! Seu apelido foi atualizado para `{novo_nick}`.\n"
-            "Você já pode participar do servidor. Apagaremos este canal em 5 segundos..."
+            f"✅ Obrigado, {member.mention}! Apelido atualizado para `{novo_nick}`. "
+            "Removeremos este canal em 5s..."
         )
         await asyncio.sleep(5)
-        try:
-            await channel.delete(reason="Verificação concluída.")
-            print(f"[DEBUG] Canal {channel.name} excluído após verificação de {member}.")
-        except Exception as e:
-            print(f"[ERRO] ao deletar canal {channel.name}: {e}")
+        await channel.delete(reason="Verificação concluída.")
+        if member.id in self.verification_channels:
+            del self.verification_channels[member.id]
 
-        # Remover do dicionário
-        self.verification_channels.pop(member.id, None)
-
-        # Log de verificação
-        await self.logar(f"O usuário {member} foi verificado como '{in_game_name}'. Canal '{channel.name}' removido.")
+        # Log
+        await self.logar(f"O usuário {member} foi verificado como '{in_game_name}' (membro existente).")
 
     def salvar_in_game_name(self, discord_id: int, in_game_name: str):
-        """
-        Salva ou atualiza o nome no jogo no DB.
-        """
         session = SessionLocal()
         try:
             registro = session.query(PlayerName).filter_by(discord_id=str(discord_id)).first()
@@ -189,7 +180,6 @@ class NomeCog(commands.Cog):
                 novo = PlayerName(discord_id=str(discord_id), in_game_name=in_game_name)
                 session.add(novo)
             session.commit()
-            print(f"[DEBUG] Nome no jogo '{in_game_name}' salvo para ID={discord_id} no banco.")
         except Exception as e:
             session.rollback()
             print(f"[ERRO DB] Não foi possível salvar: {e}")
@@ -197,17 +187,13 @@ class NomeCog(commands.Cog):
             session.close()
 
     async def logar(self, mensagem: str):
-        """
-        Envia logs para o canal staff, se configurado.
-        """
         if LOG_CHANNEL_ID:
             channel = self.bot.get_channel(LOG_CHANNEL_ID)
             if channel:
                 try:
                     await channel.send(mensagem)
                 except discord.Forbidden:
-                    print(f"[ERRO] Não tenho permissão de enviar mensagem em {channel}.")
+                    pass
 
 async def setup(bot: commands.Bot):
-    # Adiciona este cog ao bot.
     await bot.add_cog(NomeCog(bot))
