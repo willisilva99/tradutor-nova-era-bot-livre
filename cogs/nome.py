@@ -29,7 +29,7 @@ class NomeNoCanalCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # Ignora mensagens de bots ou DMs
+        # Ignora mensagens de bots ou em DMs
         if message.author.bot or isinstance(message.channel, discord.DMChannel):
             return
 
@@ -41,22 +41,22 @@ class NomeNoCanalCog(commands.Cog):
         if member.id == guild.owner_id:
             return
 
-        # Se já estiver verificado, libera
+        # Se já estiver verificado, não faz nada
         if await self.is_verified(member):
             return
 
-        # Tenta apagar a mensagem original do usuário
+        # Apaga a mensagem para evitar poluição
         try:
             await message.delete()
         except discord.Forbidden:
             await self.logar(f"[ERRO] Não pude apagar a mensagem de {member} em {channel.mention} (permissão negada).")
 
-        # Evita repetir o pedido se já estiver aguardando esse membro
+        # Se já estamos aguardando resposta deste membro, não repete o pedido
         if member.id in self.waiting_for_name:
             return
         self.waiting_for_name.add(member.id)
 
-        # Cria o embed de verificação com os termos (sem mencionar explicitamente o formato)
+        # Cria embed de verificação com os termos
         embed_pedido = discord.Embed(
             title="Verificação Necessária",
             description=(
@@ -65,7 +65,11 @@ class NomeNoCanalCog(commands.Cog):
                 "1. Ao prosseguir, você concorda com as regras do servidor.\n"
                 "2. Se o nome fornecido **não** for realmente o que você usa no jogo, "
                 "**poderá ser banido** tanto do servidor quanto do jogo.\n\n"
-                f"Por favor, digite agora seu nome no jogo (você tem {WAIT_TIME} segundos)."
+                "Por favor, digite seu nome no jogo e, se desejar, seu nome no Discord "
+                "separados por uma vírgula.\n"
+                "Exemplo: `Jão, Fulano`\n"
+                "Se não quiser alterar seu nome no Discord, basta digitar somente o nome do jogo."
+                f"\nVocê tem {WAIT_TIME} segundos para responder."
             ),
             color=COR_PADRAO
         )
@@ -105,9 +109,16 @@ class NomeNoCanalCog(commands.Cog):
         except discord.Forbidden:
             pass
 
-        in_game_name = resposta.content.strip()
-        # Usa o display_name para formar o apelido final
-        novo_nick = f"[{in_game_name}] - {member.display_name}"
+        # Processa a resposta: divide em duas partes se houver vírgula
+        parts = resposta.content.split(',')
+        game_name = parts[0].strip()
+        if len(parts) > 1:
+            discord_name = parts[1].strip()
+        else:
+            discord_name = member.display_name
+
+        # Define o novo apelido utilizando o nome do jogo e o nome do Discord informado ou exibido
+        novo_nick = f"[{game_name}] - {discord_name}"
 
         # Tenta alterar o apelido do usuário
         try:
@@ -135,7 +146,7 @@ class NomeNoCanalCog(commands.Cog):
             self.waiting_for_name.remove(member.id)
             return
 
-        # Salva o apelido final (novo_nick) no DB
+        # Salva o novo apelido no DB (novo_nick)
         self.salvar_in_game_name(member.id, novo_nick)
 
         embed_sucesso = discord.Embed(
@@ -150,7 +161,7 @@ class NomeNoCanalCog(commands.Cog):
         self.waiting_for_name.remove(member.id)
         await self.logar(f"O usuário {member} definiu seu apelido para '{novo_nick}' e foi verificado.")
 
-        # Apaga os embeds de pedido e de sucesso após 60 segundos para não poluir o canal
+        # Aguarda 60 segundos e depois apaga os embeds de pedido e de sucesso
         await asyncio.sleep(60)
         try:
             await pedido_msg.delete()
@@ -176,7 +187,7 @@ class NomeNoCanalCog(commands.Cog):
             embed_alerta = discord.Embed(
                 title="Alerta de Nickname",
                 description=(
-                    f"{after.mention}, você removeu o prefixo do seu apelido.\n"
+                    f"{after.mention}, você removeu parte do seu apelido.\n"
                     "Mantenha o formato ou poderá ser punido!"
                 ),
                 color=COR_ALERTA
@@ -186,7 +197,7 @@ class NomeNoCanalCog(commands.Cog):
             staff_role = guild.get_role(STAFF_ROLE_ID)
             if staff_role and system_channel:
                 await system_channel.send(f"{staff_role.mention}, fiquem de olho.")
-            await self.logar(f"Usuário {after} removeu o prefixo. Nick era '{before.nick}' e virou '{after.nick}'.")
+            await self.logar(f"Usuário {after} removeu parte do apelido. Nick era '{before.nick}' e virou '{after.nick}'.")
 
     async def is_verified(self, member: discord.Member) -> bool:
         if not member.nick or not NICK_REGEX.match(member.nick):
