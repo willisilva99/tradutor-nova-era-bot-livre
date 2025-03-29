@@ -1,3 +1,4 @@
+
 import re
 import discord
 from discord.ext import commands
@@ -39,9 +40,10 @@ class NomeNoCanalCog(commands.Cog):
 
         member = message.author
         channel = message.channel
+        guild = member.guild
 
         # Se for o dono do servidor, ignora
-        if member == member.guild.owner:
+        if member.id == guild.owner_id:
             return
 
         # Se já verificado, libera
@@ -142,10 +144,9 @@ class NomeNoCanalCog(commands.Cog):
     # -----------------------------------------------------
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
-        # Se for dono ou bot, ignora
         if after.bot:
             return
-        if after == after.guild.owner:
+        if after.id == after.guild.owner_id:
             return
 
         if before.nick == after.nick:
