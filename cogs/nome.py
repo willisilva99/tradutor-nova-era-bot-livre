@@ -1,4 +1,3 @@
-
 import re
 import discord
 from discord.ext import commands
@@ -18,19 +17,22 @@ COR_ALERTA = discord.Color.yellow()
 ########################################
 # OUTRAS CONFIGURAÇÕES
 ########################################
-WAIT_TIME = 60           # Tempo (segundos) para esperar resposta do usuário
-LOG_CHANNEL_ID = 978460787586789406  # ID do canal de logs (opcional; se não quiser logs, deixe 0)
-STAFF_ROLE_ID = 978464190979260426   # ID do cargo da staff (para mention no on_member_update, se quiser)
-NICK_REGEX = re.compile(r'^\[.+\]\s*-\s*.+$')  # [NomeJogo] - NomeDiscord
+WAIT_TIME = 60  # Tempo (segundos) para esperar resposta do usuário
+LOG_CHANNEL_ID = 978460787586789406  # ID do canal de logs (opcional; se não quiser logs, defina como 0)
+STAFF_ROLE_ID = 978464190979260426   # ID do cargo da staff (para mention no on_member_update, se desejar)
+NICK_REGEX = re.compile(r'^\[.+\]\s*-\s*.+$')  # Valida o formato: [NomeDoJogo] - NomeDiscord
 
 class NomeNoCanalCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.waiting_for_name = set()  # IDs dos usuários aguardando resposta
 
+    # -----------------------------------------------------
+    # 1) Interceptar mensagens de quem não está verificado
+    # -----------------------------------------------------
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # Ignora bots e mensagens em DM
+        # Ignora mensagens de bots e DMs
         if message.author.bot or isinstance(message.channel, discord.DMChannel):
             return
 
@@ -42,22 +44,22 @@ class NomeNoCanalCog(commands.Cog):
         if member.id == guild.owner_id:
             return
 
-        # Se o membro já estiver verificado, nada acontece
+        # Se já estiver verificado (apelido no formato e registro no DB), libera
         if await self.is_verified(member):
             return
 
-        # Apaga a mensagem original para evitar poluição
+        # Apaga a mensagem do usuário para evitar poluição
         try:
             await message.delete()
         except discord.Forbidden:
-            await self.logar(f"[ERRO] Não pude apagar a msg de {member} em {channel.mention} (permissão negada).")
+            await self.logar(f"[ERRO] Não pude apagar a mensagem de {member} em {channel.mention} (permissão negada).")
 
-        # Se já estamos esperando esse membro, não repete o pedido
+        # Evita repetir o pedido se já estiver aguardando
         if member.id in self.waiting_for_name:
             return
         self.waiting_for_name.add(member.id)
 
-        # Cria embed de verificação com termos (sem mencionar o formato exato)
+        # Embed de verificação com termos (sem mencionar o formato explicitamente)
         embed_pedido = discord.Embed(
             title="Verificação Necessária",
             description=(
@@ -74,7 +76,7 @@ class NomeNoCanalCog(commands.Cog):
 
         pedido_msg = await channel.send(embed=embed_pedido)
 
-        # Aguarda a resposta do usuário no mesmo canal
+        # Aguarda resposta do usuário
         def check(m: discord.Message):
             return m.author.id == member.id and m.channel.id == channel.id
 
@@ -91,8 +93,8 @@ class NomeNoCanalCog(commands.Cog):
             )
             timeout_msg = await channel.send(embed=embed_timeout)
             self.waiting_for_name.remove(member.id)
-            # Apaga as mensagens de pedido e timeout após 30s
-            await asyncio.sleep(30)
+            # Apaga os embeds de pedido e timeout após 60 segundos
+            await asyncio.sleep(60)
             try:
                 await pedido_msg.delete()
                 await timeout_msg.delete()
@@ -107,7 +109,6 @@ class NomeNoCanalCog(commands.Cog):
             pass
 
         in_game_name = resposta.content.strip()
-        # Usa o display_name para o apelido
         novo_nick = f"[{in_game_name}] - {member.display_name}"
 
         # Tenta editar o apelido do usuário
@@ -124,7 +125,7 @@ class NomeNoCanalCog(commands.Cog):
             )
             perm_msg = await channel.send(embed=embed_perm)
             self.waiting_for_name.remove(member.id)
-            await asyncio.sleep(30)
+            await asyncio.sleep(60)
             try:
                 await perm_msg.delete()
                 await pedido_msg.delete()
@@ -136,7 +137,7 @@ class NomeNoCanalCog(commands.Cog):
             self.waiting_for_name.remove(member.id)
             return
 
-        # Salva o apelido final no banco (novo_nick)
+        # Salva o apelido final no DB (novo_nick)
         self.salvar_in_game_name(member.id, novo_nick)
 
         embed_sucesso = discord.Embed(
@@ -151,14 +152,17 @@ class NomeNoCanalCog(commands.Cog):
         self.waiting_for_name.remove(member.id)
         await self.logar(f"O usuário {member} definiu seu apelido para '{novo_nick}' e foi verificado.")
 
-        # Apaga as mensagens do embed de pedido e de sucesso após 30 segundos para não poluir
-        await asyncio.sleep(30)
+        # Apaga os embeds de pedido e de sucesso após 60 segundos
+        await asyncio.sleep(60)
         try:
             await pedido_msg.delete()
             await final_msg.delete()
         except discord.Forbidden:
             pass
 
+    # -----------------------------------------------------
+    # 2) on_member_update: se removeu o prefixo, alerta a staff
+    # -----------------------------------------------------
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
         if after.bot:
@@ -189,6 +193,9 @@ class NomeNoCanalCog(commands.Cog):
                 await system_channel.send(f"{staff_role.mention}, fiquem de olho.")
             await self.logar(f"Usuário {after} removeu o prefixo. Nick era '{before.nick}' e virou '{after.nick}'.")
 
+    # -----------------------------------------------------
+    # 3) Checar se o usuário está verificado
+    # -----------------------------------------------------
     async def is_verified(self, member: discord.Member) -> bool:
         if not member.nick or not NICK_REGEX.match(member.nick):
             return False
@@ -199,6 +206,9 @@ class NomeNoCanalCog(commands.Cog):
         finally:
             session.close()
 
+    # -----------------------------------------------------
+    # 4) Salvar o apelido no DB (com data/hora)
+    # -----------------------------------------------------
     def salvar_in_game_name(self, discord_id: int, nickname: str):
         session = SessionLocal()
         try:
@@ -215,6 +225,9 @@ class NomeNoCanalCog(commands.Cog):
         finally:
             session.close()
 
+    # -----------------------------------------------------
+    # 5) Log de Ações (Opcional)
+    # -----------------------------------------------------
     async def logar(self, mensagem: str):
         if not LOG_CHANNEL_ID:
             return
