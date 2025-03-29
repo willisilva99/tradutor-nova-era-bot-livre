@@ -1,3 +1,4 @@
+ompile(r'^\[.+\]\s*-\s*.+$')  # [NomeJogo] - NomeDiscord
 
 import re
 import discord
@@ -10,7 +11,7 @@ from db import SessionLocal, PlayerName
 ########################################
 # CONFIGURAÇÕES DE CORES (Padronização)
 ########################################
-COR_PADRAO = discord.Color.from_rgb(255, 165, 0)   # Laranja (por exemplo)
+COR_PADRAO = discord.Color.from_rgb(255, 165, 0)   # Laranja
 COR_SUCESSO = discord.Color.green()
 COR_ERRO = discord.Color.red()
 COR_ALERTA = discord.Color.yellow()
@@ -42,7 +43,7 @@ class NomeNoCanalCog(commands.Cog):
         channel = message.channel
         guild = member.guild
 
-        # Se for o dono do servidor, ignora
+        # Se for dono do servidor, ignora
         if member.id == guild.owner_id:
             return
 
@@ -54,9 +55,9 @@ class NomeNoCanalCog(commands.Cog):
         try:
             await message.delete()
         except discord.Forbidden:
-            await self.logar(f"[ERRO] Não pude apagar a msg de {member} em {channel.mention} por falta de permissão.")
+            await self.logar(f"[ERRO] Não pude apagar a msg de {member} em {channel.mention} (permissão negada).")
 
-        # Se já estamos esperando esse membro, não repete a pergunta
+        # Se já estamos esperando resposta desse membro, não repete a pergunta
         if member.id in self.waiting_for_name:
             return
         self.waiting_for_name.add(member.id)
@@ -67,9 +68,8 @@ class NomeNoCanalCog(commands.Cog):
             description=(
                 f"{member.mention}, você ainda não definiu seu **nome no jogo**.\n\n"
                 "**Termos Básicos**:\n"
-                "1. Seu apelido deve ficar no formato `[NomeDoJogo] - NomeDiscord`.\n"
-                "2. Ao prosseguir, você concorda com as regras do servidor.\n"
-                "3. Se o nome fornecido **não** for realmente o que você usa no jogo, "
+                "1. Ao prosseguir, você concorda com as regras do servidor.\n"
+                "2. Se o nome fornecido **não** for realmente o que você usa no jogo, "
                 "**poderá ser banido** tanto do servidor quanto do jogo.\n\n"
                 f"Por favor, digite agora seu nome no jogo (você tem {WAIT_TIME} segundos)."
             ),
@@ -122,8 +122,8 @@ class NomeNoCanalCog(commands.Cog):
             self.waiting_for_name.remove(member.id)
             return
 
-        # Salvar no DB
-        self.salvar_in_game_name(member.id, in_game_name)
+        # Salva no DB com o apelido final (novo_nick)
+        self.salvar_in_game_name(member.id, novo_nick)
 
         # Embed de sucesso
         embed_sucesso = discord.Embed(
@@ -134,10 +134,16 @@ class NomeNoCanalCog(commands.Cog):
             ),
             color=COR_SUCESSO
         )
-        await channel.send(embed=embed_sucesso)
-
+        final_msg = await channel.send(embed=embed_sucesso)
         self.waiting_for_name.remove(member.id)
-        await self.logar(f"O usuário {member} definiu nome no jogo: '{in_game_name}' e foi verificado.")
+        await self.logar(f"O usuário {member} definiu seu apelido para '{novo_nick}' e foi verificado.")
+
+        # Apagar a mensagem de sucesso após 30 segundos
+        await asyncio.sleep(30)
+        try:
+            await final_msg.delete()
+        except discord.Forbidden:
+            pass
 
     # -----------------------------------------------------
     # 2) on_member_update: se removeu prefixo, alerta staff
@@ -179,11 +185,6 @@ class NomeNoCanalCog(commands.Cog):
     # 3) Checar se usuário está verificado
     # -----------------------------------------------------
     async def is_verified(self, member: discord.Member) -> bool:
-        """
-        Está verificado se:
-          1. Nick no formato [NomeJogo] - NomeDiscord
-          2. Registro no DB
-        """
         if not member.nick or not NICK_REGEX.match(member.nick):
             return False
 
@@ -197,14 +198,14 @@ class NomeNoCanalCog(commands.Cog):
     # -----------------------------------------------------
     # 4) Salvar no DB (com data/hora)
     # -----------------------------------------------------
-    def salvar_in_game_name(self, discord_id: int, in_game_name: str):
+    def salvar_in_game_name(self, discord_id: int, nickname: str):
         session = SessionLocal()
         try:
             reg = session.query(PlayerName).filter_by(discord_id=str(discord_id)).first()
             if reg:
-                reg.in_game_name = in_game_name
+                reg.in_game_name = nickname
             else:
-                novo = PlayerName(discord_id=str(discord_id), in_game_name=in_game_name)
+                novo = PlayerName(discord_id=str(discord_id), in_game_name=nickname)
                 session.add(novo)
             session.commit()
         except Exception as e:
@@ -217,9 +218,6 @@ class NomeNoCanalCog(commands.Cog):
     # 5) Log de Ações (Opcional)
     # -----------------------------------------------------
     async def logar(self, mensagem: str):
-        """
-        Envia logs para LOG_CHANNEL_ID, se configurado.
-        """
         if not LOG_CHANNEL_ID:
             return
         channel = self.bot.get_channel(LOG_CHANNEL_ID)
