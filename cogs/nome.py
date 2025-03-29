@@ -2,31 +2,36 @@ import re
 import discord
 from discord.ext import commands
 import asyncio
+from datetime import datetime
 
 from db import SessionLocal, PlayerName
 
-# Regex para checar se o apelido está em [NomeDoJogo] - NomeDiscord
-NICK_REGEX = re.compile(r'^\[.+\]\s*-\s*.+$')
+########################################
+# CONFIGURAÇÕES DE CORES (Padronização)
+########################################
+COR_PADRAO = discord.Color.from_rgb(255, 165, 0)   # Laranja (por exemplo)
+COR_SUCESSO = discord.Color.green()
+COR_ERRO = discord.Color.red()
+COR_ALERTA = discord.Color.yellow()
+
+########################################
+# OUTRAS CONFIGURAÇÕES
+########################################
+WAIT_TIME = 60           # Tempo (segundos) para esperar resposta do usuário
+LOG_CHANNEL_ID = 123456  # ID do canal de logs (opcional; se não quiser logs, deixe 0)
+STAFF_ROLE_ID = 654321   # ID do cargo da staff (para mention no on_member_update, se quiser)
+NICK_REGEX = re.compile(r'^\[.+\]\s*-\s*.+$')  # [NomeJogo] - NomeDiscord
 
 class NomeNoCanalCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Para evitar perguntar múltiplas vezes ao mesmo tempo ao mesmo usuário
-        self.waiting_for_name = set()
+        self.waiting_for_name = set()  # Usuários que estão no "processo" de enviar nome
 
     # -----------------------------------------------------
     # 1) Interceptar mensagens de quem não está verificado
     # -----------------------------------------------------
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        """
-        Se o autor da mensagem não estiver verificado:
-         - Apaga a mensagem
-         - Envia Embed de termos e pede nome no mesmo canal
-         - Aguarda resposta 60s
-         - Ajusta apelido, salva no DB e avisa
-        """
-        # Ignora bots e mensagens em DM
         if message.author.bot:
             return
         if isinstance(message.channel, discord.DMChannel):
@@ -39,18 +44,18 @@ class NomeNoCanalCog(commands.Cog):
         if await self.is_verified(member):
             return
 
-        # Apaga a mensagem do não-verificado
+        # Apaga a mensagem
         try:
             await message.delete()
         except discord.Forbidden:
-            pass
+            await self.logar(f"[ERRO] Não pude apagar a msg de {member} em {channel.mention} por falta de permissão.")
 
-        # Se já estamos esperando esse usuário, não pergunta novamente
+        # Se já estamos esperando esse membro, não repete a pergunta
         if member.id in self.waiting_for_name:
             return
         self.waiting_for_name.add(member.id)
 
-        # Embed de termos
+        # Cria Embed de Termos/Pedido
         embed_pedido = discord.Embed(
             title="Verificação Necessária",
             description=(
@@ -58,80 +63,81 @@ class NomeNoCanalCog(commands.Cog):
                 "**Termos Básicos**:\n"
                 "1. Seu apelido deve ficar no formato `[NomeDoJogo] - NomeDiscord`.\n"
                 "2. Ao prosseguir, você concorda com as regras do servidor.\n"
-                "3. **Se o nome fornecido não for realmente o mesmo que você usa no jogo, "
-                "você poderá ser banido do servidor e do jogo.**\n\n"
-                "**Por favor, digite agora seu nome no jogo (você tem 60 segundos).**"
+                "3. Se o nome fornecido **não** for realmente o que você usa no jogo, "
+                "**poderá ser banido** tanto do servidor quanto do jogo.\n\n"
+                f"Por favor, digite agora seu nome no jogo (você tem {WAIT_TIME} segundos)."
             ),
-            color=discord.Color.orange()
+            color=COR_PADRAO
         )
         embed_pedido.set_footer(text="Sistema de Verificação")
 
         await channel.send(embed=embed_pedido)
 
-        # Aguarda a próxima mensagem do mesmo autor
+        # Espera resposta
         def check(m: discord.Message):
-            return m.author.id == member.id and m.channel.id == channel.id
+            return (m.author.id == member.id) and (m.channel.id == channel.id)
 
         try:
-            resposta = await self.bot.wait_for("message", timeout=60.0, check=check)
+            resposta = await self.bot.wait_for("message", timeout=WAIT_TIME, check=check)
         except asyncio.TimeoutError:
-            # Tempo esgotado
             embed_timeout = discord.Embed(
                 title="Tempo Esgotado",
                 description=(
-                    f"{member.mention}, você não respondeu a tempo.\n"
-                    "Envie outra mensagem a qualquer momento para tentar novamente."
+                    f"{member.mention}, você não respondeu em {WAIT_TIME} segundos.\n"
+                    "Envie outra mensagem para tentar novamente."
                 ),
-                color=discord.Color.red()
+                color=COR_ERRO
             )
             await channel.send(embed=embed_timeout)
             self.waiting_for_name.remove(member.id)
             return
 
+        # Usuário mandou o nome do jogo
         in_game_name = resposta.content.strip()
         novo_nick = f"[{in_game_name}] - {member.name}"
 
-        # Tenta alterar o apelido
+        # Tentar editar apelido
         try:
             await member.edit(nick=novo_nick)
         except discord.Forbidden:
-            embed_forbidden = discord.Embed(
+            embed_perm = discord.Embed(
                 title="Erro de Permissão",
                 description=(
-                    f"{member.mention}, não tenho permissão para alterar seu apelido.\n"
+                    f"{member.mention}, não consigo alterar seu apelido.\n"
                     "Fale com um administrador!"
                 ),
-                color=discord.Color.red()
+                color=COR_ERRO
             )
-            await channel.send(embed=embed_forbidden)
+            await channel.send(embed=embed_perm)
+            self.waiting_for_name.remove(member.id)
+            return
+        except Exception as e:
+            await self.logar(f"[ERRO] ao editar apelido de {member}: {e}")
             self.waiting_for_name.remove(member.id)
             return
 
-        # Salva no DB
+        # Salvar no DB
         self.salvar_in_game_name(member.id, in_game_name)
 
         # Embed de sucesso
         embed_sucesso = discord.Embed(
             title="Verificação Concluída",
             description=(
-                f"✅ {member.mention}, seu apelido foi definido para **`{novo_nick}`**.\n"
-                "Agora você está liberado para conversar!"
+                f"✅ {member.mention}, seu apelido agora é **`{novo_nick}`**.\n"
+                "Você está liberado para conversar!"
             ),
-            color=discord.Color.green()
+            color=COR_SUCESSO
         )
         await channel.send(embed=embed_sucesso)
 
         self.waiting_for_name.remove(member.id)
+        await self.logar(f"O usuário {member} definiu nome no jogo: '{in_game_name}' e foi verificado.")
 
     # -----------------------------------------------------
-    # 2) Detectar mudança de apelido (opcional)
+    # 2) on_member_update: se removeu prefixo, alerta staff
     # -----------------------------------------------------
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
-        """
-        Se o usuário removeu o formato [NomeDoJogo] - NomeDiscord depois de verificado,
-        enviamos um aviso. Se quiser, pode banir ou reverter o apelido automaticamente.
-        """
         if before.bot or after.bot:
             return
         if before.nick == after.nick:
@@ -140,62 +146,65 @@ class NomeNoCanalCog(commands.Cog):
         was_verified = (before.nick and NICK_REGEX.match(before.nick))
         is_still_verified = (after.nick and NICK_REGEX.match(after.nick))
 
-        # Se estava verificado e agora não está
         if was_verified and not is_still_verified:
-            # Pode mandar aviso num canal público ou num canal de logs
-            # Exemplo: mandar aviso no "system channel"
+            # Alerta no system_channel ou logs
             guild = after.guild
             system_channel = guild.system_channel
+            embed_alerta = discord.Embed(
+                title="Alerta de Nickname",
+                description=(
+                    f"{after.mention}, você removeu o prefixo `[NomeDoJogo] - ...` do seu apelido.\n"
+                    "Mantenha o formato ou poderá ser punido!"
+                ),
+                color=COR_ALERTA
+            )
             if system_channel:
-                embed_alert = discord.Embed(
-                    title="Alerta de Nickname",
-                    description=(
-                        f"{after.mention}, você removeu o prefixo `[NomeDoJogo] - ...` do seu apelido.\n"
-                        "Por favor, mantenha o formato correto ou poderá ser punido!"
-                    ),
-                    color=discord.Color.yellow()
-                )
-                await system_channel.send(embed=embed_alert)
+                await system_channel.send(embed=embed_alerta)
 
-            # Se quiser banir ou reverter o apelido, descomente:
+            # Mencionar staff, se quiser
+            staff_role = guild.get_role(STAFF_ROLE_ID)
+            if staff_role:
+                await system_channel.send(f"{staff_role.mention}, fiquem de olho.")
+
+            # Se quiser banir ou reverter
             # try:
             #     await after.edit(nick=before.nick)
             # except discord.Forbidden:
             #     pass
-            # OU ban:
-            # await after.ban(reason="Removeu prefixo após verificação.")
+
+            await self.logar(f"Usuário {after} removeu prefixo. Nick era '{before.nick}' e virou '{after.nick}'.")
 
     # -----------------------------------------------------
-    # 3) Funções auxiliares
+    # 3) Checar se usuário está verificado
     # -----------------------------------------------------
     async def is_verified(self, member: discord.Member) -> bool:
         """
-        Retorna True se o membro:
-          1. Tiver apelido no formato [NomeDoJogo] - NomeDiscord, e
-          2. Tiver registro no DB (PlayerName).
+        Está verificado se:
+          1. Nick no formato [NomeJogo] - NomeDiscord
+          2. Registro no DB
         """
         if not member.nick or not NICK_REGEX.match(member.nick):
             return False
 
         session = SessionLocal()
         try:
-            registro = session.query(PlayerName).filter_by(discord_id=str(member.id)).first()
-            return bool(registro)  # True se encontrou registro
-        except:
-            return False
+            reg = session.query(PlayerName).filter_by(discord_id=str(member.id)).first()
+            return bool(reg)
         finally:
             session.close()
 
+    # -----------------------------------------------------
+    # 4) Salvar no DB (com data/hora)
+    # -----------------------------------------------------
     def salvar_in_game_name(self, discord_id: int, in_game_name: str):
-        """
-        Insere ou atualiza in_game_name no DB.
-        """
         session = SessionLocal()
         try:
-            registro = session.query(PlayerName).filter_by(discord_id=str(discord_id)).first()
-            if registro:
-                registro.in_game_name = in_game_name
+            reg = session.query(PlayerName).filter_by(discord_id=str(discord_id)).first()
+            if reg:
+                reg.in_game_name = in_game_name
+                # updated_at é automático se no db.py estiver `onupdate=datetime.utcnow`
             else:
+                # registramos data/hora pela 1ª vez
                 novo = PlayerName(discord_id=str(discord_id), in_game_name=in_game_name)
                 session.add(novo)
             session.commit()
@@ -204,6 +213,22 @@ class NomeNoCanalCog(commands.Cog):
             print(f"[ERRO DB] Não foi possível salvar: {e}")
         finally:
             session.close()
+
+    # -----------------------------------------------------
+    # 5) Log de Ações (Opcional)
+    # -----------------------------------------------------
+    async def logar(self, mensagem: str):
+        """
+        Envia logs para LOG_CHANNEL_ID, se configurado.
+        """
+        if not LOG_CHANNEL_ID:
+            return  # Se não definiu, não faz nada
+        channel = self.bot.get_channel(LOG_CHANNEL_ID)
+        if channel:
+            try:
+                await channel.send(mensagem)
+            except discord.Forbidden:
+                print("[ERRO] Permissão negada para enviar logs no canal de log.")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(NomeNoCanalCog(bot))
