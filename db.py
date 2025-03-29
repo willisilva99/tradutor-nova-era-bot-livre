@@ -26,7 +26,6 @@ class ServerConfig(Base):
     password = Column(String, nullable=True)
     channel_id = Column(String, nullable=False)
 
-
 # ---------------------------------------------------
 # Tabela ServerStatusConfig
 # ---------------------------------------------------
@@ -39,8 +38,18 @@ class ServerStatusConfig(Base):
     channel_id = Column(String, nullable=False)
     message_id = Column(String, nullable=False)
 
+# ---------------------------------------------------
+# Tabela PlayerName
+# ---------------------------------------------------
+class PlayerName(Base):
+    __tablename__ = "player_name"
 
-
+    id = Column(Integer, primary_key=True, index=True)
+    discord_id = Column(String, unique=True, index=True, nullable=False)
+    in_game_name = Column(String, nullable=False)
+    # Se quiser armazenar data de criação/atualização:
+    # created_at = Column(DateTime, default=datetime.utcnow)
+    # updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 # ✅ Criar tabelas apenas se não existirem
 try:
