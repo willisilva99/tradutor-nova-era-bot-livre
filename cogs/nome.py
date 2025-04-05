@@ -13,6 +13,7 @@ COR_PADRAO = discord.Color.from_rgb(255, 165, 0)   # Laranja
 COR_SUCESSO = discord.Color.green()
 COR_ERRO = discord.Color.red()
 COR_ALERTA = discord.Color.yellow()
+
 ########################################
 # OUTRAS CONFIGURAÇÕES
 ########################################
@@ -20,7 +21,6 @@ WAIT_TIME = 90           # Tempo (segundos) para esperar resposta do usuário
 LOG_CHANNEL_ID = 978460787586789406  # ID do canal de logs (opcional; se não quiser logs, defina como 0)
 STAFF_ROLE_ID = 978464190979260426   # ID do cargo da staff (para mention no on_member_update, se desejar)
 NICK_REGEX = re.compile(r'^\[.+\]\s*-\s*.+$')  # Padrão interno: [NomeDoJogo] - NomeDiscord
-GIF_VERIFICACAO = "https://i.imgur.com/GI1TZEa.gif" 
 
 class NomeNoCanalCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -29,7 +29,6 @@ class NomeNoCanalCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # Ignora mensagens de bots ou DMs
         if message.author.bot or isinstance(message.channel, discord.DMChannel):
             return
 
@@ -37,28 +36,23 @@ class NomeNoCanalCog(commands.Cog):
         channel = message.channel
         guild = member.guild
 
-        # Ignora o dono do servidor
         if member.id == guild.owner_id:
             return
 
-        # Se o usuário digitar "mudar nick", inicia o fluxo de alteração
         if message.content.lower().strip() == "mudar nick":
             try:
                 await message.delete()
             except discord.Forbidden:
                 pass
-            # Apenas usuários verificados podem alterar o nick via esse comando
             if not await self.is_verified(member):
                 await channel.send(f"{member.mention}, você ainda não está verificado. Por favor, use o processo de verificação normal.")
                 return
             await self.prompt_mudar_nick(member, channel)
             return
 
-        # Se já estiver verificado, libera (não intercepta a mensagem)
         if await self.is_verified(member):
             return
 
-        # Processo normal de verificação (para usuários não verificados)
         try:
             await message.delete()
         except discord.Forbidden:
@@ -82,8 +76,9 @@ class NomeNoCanalCog(commands.Cog):
             ),
             color=COR_PADRAO
         )
+        embed_pedido.set_image(url="https://i.imgur.com/GI1TZEa.gif")  # <- GIF adicionado aqui
         embed_pedido.set_footer(text="Sistema de Verificação")
-        embed_mudar.set_image(url=GIF_VERIFICACAO)  # <--- GIF ADICIONADO AQUI
+
         pedido_msg = await channel.send(embed=embed_pedido)
 
         def check(m: discord.Message):
@@ -115,7 +110,6 @@ class NomeNoCanalCog(commands.Cog):
         except discord.Forbidden:
             pass
 
-        # Processa a resposta: separa por vírgula se fornecido
         parts = resposta.content.split(',')
         game_name = parts[0].strip()
         if len(parts) > 1 and parts[1].strip():
@@ -172,10 +166,6 @@ class NomeNoCanalCog(commands.Cog):
             pass
 
     async def prompt_mudar_nick(self, member: discord.Member, channel: discord.TextChannel):
-        """
-        Fluxo para mudar o apelido, ativado quando o usuário digitar "mudar nick".
-        """
-        # Se já estamos aguardando resposta desse membro, não repete o pedido
         if member.id in self.waiting_for_name:
             return
         self.waiting_for_name.add(member.id)
