@@ -76,7 +76,7 @@ class NomeNoCanalCog(commands.Cog):
             ),
             color=COR_PADRAO
         )
-        embed_pedido.set_image(url="https://i.imgur.com/GI1TZEa.gif")  # <- GIF adicionado aqui
+        embed_pedido.set_image(url="https://imgur.com/a/GI1TZEa.gif")  # <- GIF adicionado aqui
         embed_pedido.set_footer(text="Sistema de Verificação")
 
         pedido_msg = await channel.send(embed=embed_pedido)
