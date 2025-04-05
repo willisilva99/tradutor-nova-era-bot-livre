@@ -13,7 +13,6 @@ COR_PADRAO = discord.Color.from_rgb(255, 165, 0)   # Laranja
 COR_SUCESSO = discord.Color.green()
 COR_ERRO = discord.Color.red()
 COR_ALERTA = discord.Color.yellow()
-
 ########################################
 # OUTRAS CONFIGURAÇÕES
 ########################################
@@ -21,6 +20,7 @@ WAIT_TIME = 90           # Tempo (segundos) para esperar resposta do usuário
 LOG_CHANNEL_ID = 978460787586789406  # ID do canal de logs (opcional; se não quiser logs, defina como 0)
 STAFF_ROLE_ID = 978464190979260426   # ID do cargo da staff (para mention no on_member_update, se desejar)
 NICK_REGEX = re.compile(r'^\[.+\]\s*-\s*.+$')  # Padrão interno: [NomeDoJogo] - NomeDiscord
+GIF_VERIFICACAO = "https://i.imgur.com/GI1TZEa.gif" 
 
 class NomeNoCanalCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -83,7 +83,7 @@ class NomeNoCanalCog(commands.Cog):
             color=COR_PADRAO
         )
         embed_pedido.set_footer(text="Sistema de Verificação")
-
+        embed_mudar.set_image(url=GIF_VERIFICACAO)  # <--- GIF ADICIONADO AQUI
         pedido_msg = await channel.send(embed=embed_pedido)
 
         def check(m: discord.Message):
