@@ -1,313 +1,470 @@
-import re
-import time
+# verificacao_cog.py
 import discord
 from discord.ext import commands
-import asyncio
-from datetime import datetime
 from discord import app_commands
+import asyncio
+import re
+import datetime
 
-########################################
-# CONFIGURAÇÕES / IDs
-########################################
+from db import SessionLocal, PlayerName, GuildConfig
+
+# Cores de exemplo
 COR_SUCESSO = discord.Color.green()
 COR_ERRO    = discord.Color.red()
 COR_ALERTA  = discord.Color.yellow()
 
-VERIFICATION_CHANNEL_ID = 1234567890123456
-VERIFICADO_ROLE_ID      = 111222333444  # Cargo de verificado
-STAFF_ROLE_ID           = 555666777888  # Cargo da staff
-LOG_CHANNEL_ID          = 999888777666  # Canal de logs
-
-# Regex para checar apelido no formato [alguma coisa] - alguma coisa
+# Regex para apelidos: [Algo] - Algo
 NICK_REGEX = re.compile(r'^\[.+\]\s*-\s*.+$')
 
 def validar_nomes(game_name: str, discord_name: str) -> tuple[bool, str]:
     """
-    Aplica validações mínimas:
-    - Cada um com pelo menos 3 caracteres (ignorar espaços)
-    - Montagem final não exceder 32 chars (checamos depois)
-    Retorna (True, "") se válido, ou (False, "Motivo do erro") se inválido.
+    Verifica se 'game_name' e 'discord_name' têm pelo menos 3 caracteres (ignorando espaços).
+    Retorna (True, "") se estiver ok, senão (False, "mensagem de erro").
     """
     if len(game_name.replace(" ", "")) < 3:
-        return False, "O nome do jogo deve ter ao menos 3 caracteres."
+        return False, "O nome do jogo deve ter pelo menos 3 caracteres."
     if len(discord_name.replace(" ", "")) < 3:
-        return False, "O nome do Discord deve ter ao menos 3 caracteres."
+        return False, "O nome do Discord deve ter pelo menos 3 caracteres."
     return True, ""
 
 class VerificacaoCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # ------------------------------------------------------------
-    #    LISTENER on_message: foco total no canal de verificação
-    # ------------------------------------------------------------
+    # =======================================================
+    #   1) Comandos Slash de Configuração do Servidor
+    # =======================================================
+    @app_commands.command(
+        name="set_canal_verificacao",
+        description="Define o canal de verificação para este servidor."
+    )
+    @app_commands.describe(canal="Mencione o canal ou informe o ID dele.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_canal_verificacao(
+        self,
+        interaction: discord.Interaction,
+        canal: discord.TextChannel
+    ):
+        await interaction.response.defer(ephemeral=True)
+        guild_id = str(interaction.guild_id)
+        session = SessionLocal()
+        try:
+            config = session.query(GuildConfig).filter_by(guild_id=guild_id).first()
+            if not config:
+                config = GuildConfig(guild_id=guild_id)
+                session.add(config)
+
+            config.verification_channel_id = str(canal.id)
+            session.commit()
+
+            await interaction.followup.send(
+                f"Canal de verificação configurado para {canal.mention}.",
+                ephemeral=True
+            )
+        except Exception as e:
+            session.rollback()
+            await interaction.followup.send(
+                f"Erro ao configurar o canal: {e}",
+                ephemeral=True
+            )
+        finally:
+            session.close()
+
+    @app_commands.command(
+        name="set_canal_log",
+        description="Define o canal de log para este servidor."
+    )
+    @app_commands.describe(canal="Mencione o canal ou informe o ID dele.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_canal_log(self, interaction: discord.Interaction, canal: discord.TextChannel):
+        await interaction.response.defer(ephemeral=True)
+        guild_id = str(interaction.guild_id)
+
+        session = SessionLocal()
+        try:
+            config = session.query(GuildConfig).filter_by(guild_id=guild_id).first()
+            if not config:
+                config = GuildConfig(guild_id=guild_id)
+                session.add(config)
+
+            config.log_channel_id = str(canal.id)
+            session.commit()
+
+            await interaction.followup.send(
+                f"Canal de log configurado para {canal.mention}.",
+                ephemeral=True
+            )
+        except Exception as e:
+            session.rollback()
+            await interaction.followup.send(f"Erro ao configurar o canal de log: {e}", ephemeral=True)
+        finally:
+            session.close()
+
+    @app_commands.command(
+        name="set_cargo_verificado",
+        description="Define o cargo de verificado para este servidor."
+    )
+    @app_commands.describe(cargo="Mencione o cargo ou informe o ID dele.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_cargo_verificado(self, interaction: discord.Interaction, cargo: discord.Role):
+        await interaction.response.defer(ephemeral=True)
+        guild_id = str(interaction.guild_id)
+
+        session = SessionLocal()
+        try:
+            config = session.query(GuildConfig).filter_by(guild_id=guild_id).first()
+            if not config:
+                config = GuildConfig(guild_id=guild_id)
+                session.add(config)
+
+            config.verificado_role_id = str(cargo.id)
+            session.commit()
+
+            await interaction.followup.send(
+                f"Cargo de verificado configurado para {cargo.mention}",
+                ephemeral=True
+            )
+        except Exception as e:
+            session.rollback()
+            await interaction.followup.send(f"Erro ao configurar o cargo: {e}", ephemeral=True)
+        finally:
+            session.close()
+
+    @app_commands.command(
+        name="set_cargo_staff",
+        description="Define o cargo de staff para este servidor."
+    )
+    @app_commands.describe(cargo="Mencione o cargo ou informe o ID dele.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_cargo_staff(self, interaction: discord.Interaction, cargo: discord.Role):
+        await interaction.response.defer(ephemeral=True)
+        guild_id = str(interaction.guild_id)
+
+        session = SessionLocal()
+        try:
+            config = session.query(GuildConfig).filter_by(guild_id=guild_id).first()
+            if not config:
+                config = GuildConfig(guild_id=guild_id)
+                session.add(config)
+
+            config.staff_role_id = str(cargo.id)
+            session.commit()
+
+            await interaction.followup.send(
+                f"Cargo de staff configurado para {cargo.mention}",
+                ephemeral=True
+            )
+        except Exception as e:
+            session.rollback()
+            await interaction.followup.send(f"Erro ao configurar o cargo de staff: {e}", ephemeral=True)
+        finally:
+            session.close()
+
+    # =======================================================
+    #   2) Listener on_message: Fluxo de Verificação
+    # =======================================================
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # Ignora se não for no canal de verificação
-        if message.channel.id != VERIFICATION_CHANNEL_ID:
+        # Ignorar bots, DMs, etc.
+        if message.author.bot or not message.guild:
             return
-        # Ignora bots
-        if message.author.bot:
+
+        # Verificar se há config para este servidor e se o canal é o correto
+        config = self.get_guild_config(message.guild.id)
+        if not config or not config.verification_channel_id:
+            return
+
+        # Se não estiver no canal configurado, sai
+        if str(message.channel.id) != config.verification_channel_id:
             return
 
         member = message.author
-        guild = member.guild
-
-        # Se for o dono do servidor, ignora sem apagar
-        if member.id == guild.owner_id:
+        # Se o membro já estiver verificado, podemos apagar a msg ou ignorar
+        if await self.is_verified(member, config):
+            # Exemplo: apagar a mensagem
+            try:
+                await message.delete()
+            except:
+                pass
             return
 
-        # (1) Se o membro já é verificado, apaga qualquer mensagem dele.
-        if await self.is_verified(member):
-            await self.apagar_mensagem(message)
-            return
-
-        # Se o cara digitou "mudar nick" (ou qualquer outra coisa),
-        # vamos tentar processar como verificação textual. 
-        # Caso esteja fora do padrão, apaga a mensagem de qualquer forma.
-
-        # Exemplo de split: "NomeDoJogo, NomeDiscord"
+        # Tenta processar a mensagem como verificação:
+        # Usar "Jogo, NomeDiscord" para separar
         parts = message.content.split(',')
         game_name = parts[0].strip()
         if len(parts) > 1:
             discord_name = parts[1].strip()
         else:
-            # Se não forneceu nada depois da vírgula, use display_name
-            # (ou exija sempre?)
             discord_name = member.display_name
 
         # Valida
-        ok, erro = validar_nomes(game_name, discord_name)
+        ok, msg_erro = validar_nomes(game_name, discord_name)
         if not ok:
-            # Manda embed de erro temporário, apaga a mensagem do user
-            await self.mandar_erro_e_apagar(message, f"{member.mention}, {erro}")
+            await self.apagar_e_alertar(message, msg_erro)
             return
 
-        # Monta apelido final
+        # Monta o novo nick
         novo_nick = f"[{game_name}] - {discord_name}"
         if len(novo_nick) > 32:
-            await self.mandar_erro_e_apagar(
-                message,
-                f"{member.mention}, o apelido final ultrapassa **32 caracteres**. Tente encurtar."
-            )
+            await self.apagar_e_alertar(message, "O apelido excede 32 caracteres, tente encurtar.")
             return
 
-        # Tenta alterar o apelido
+        # Tenta editar o apelido
         try:
             await member.edit(nick=novo_nick)
         except discord.Forbidden:
-            # Se não tiver permissão, apenas avisa e apaga a msg
-            await self.mandar_erro_e_apagar(
-                message,
-                f"{member.mention}, não tenho permissão/hierarquia para alterar seu apelido."
+            await self.apagar_e_alertar(
+                message, "Não tenho permissão/hierarquia para alterar seu apelido."
             )
             return
         except Exception as e:
-            await self.logar(f"[ERRO] ao editar apelido de {member}: {e}")
-            await self.mandar_erro_e_apagar(
-                message,
-                f"{member.mention}, ocorreu um erro inesperado ao alterar seu apelido."
-            )
+            await self.logar(message.guild, f"[ERRO] ao editar apelido de {member}: {e}", config)
+            await self.apagar_e_alertar(message, "Ocorreu um erro ao alterar seu apelido.")
             return
 
-        # Se chegou até aqui, deu certo
-        # [Opcional] Salva no BD (se você tiver a função):
-        # self.salvar_in_game_name(member.id, novo_nick)
+        # Salvar no DB (PlayerName)
+        session = SessionLocal()
+        try:
+            p = session.query(PlayerName).filter_by(discord_id=str(member.id)).first()
+            if not p:
+                p = PlayerName(discord_id=str(member.id), in_game_name=novo_nick)
+                session.add(p)
+            else:
+                p.in_game_name = novo_nick
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            print(f"[ERRO DB] {e}")
+        finally:
+            session.close()
 
-        # Tenta atribuir cargo de verificado
-        role = guild.get_role(VERIFICADO_ROLE_ID)
-        if role and role not in member.roles:
-            try:
-                await member.add_roles(role)
-            except discord.Forbidden:
-                await self.logar(f"[ERRO] Não pude adicionar cargo verificado a {member}.")
+        # Atribuir cargo verificado se existir
+        if config.verificado_role_id:
+            verificado_role = message.guild.get_role(int(config.verificado_role_id))
+            if verificado_role:
+                try:
+                    await member.add_roles(verificado_role)
+                except:
+                    pass
 
-        # Reage com ✅ para indicar sucesso
+        # Reagir com ✅
         try:
             await message.add_reaction("✅")
-        except discord.Forbidden:
+        except:
             pass
 
-        # Manda embed de sucesso
-        embed = discord.Embed(
+        # Enviar mensagem de sucesso
+        embed_sucesso = discord.Embed(
             title="Verificação Concluída",
             description=(
-                f"{member.mention}, seu apelido foi definido como:\n"
-                f"**`{novo_nick}`**.\nSeja bem-vindo(a)!"
+                f"{member.mention}, seu apelido foi definido como: `{novo_nick}`.\n"
+                "Você está verificado!"
             ),
             color=COR_SUCESSO
         )
-        msg_sucesso = await message.channel.send(embed=embed)
-        await self.logar(f"O usuário {member} se verificou como '{novo_nick}'.")
+        msg_sucesso = await message.channel.send(embed=embed_sucesso)
 
-        # [Opcional] Apagar o embed de sucesso após X segundos
+        # Log
+        await self.logar(
+            message.guild,
+            f"O usuário {member} se verificou como '{novo_nick}'.",
+            config
+        )
+
+        # [Opcional] Apagar a embed depois de X segundos
         await asyncio.sleep(15)
         try:
             await msg_sucesso.delete()
-        except discord.Forbidden:
+        except:
             pass
 
-        # OBS: Note que **não** apagamos a mensagem correta do usuário
-        # pois você quer manter a "verificação correta" sem apagar.
-        # Caso queira apagar mesmo assim, basta chamar `await self.apagar_mensagem(message)` também.
-
-    # ------------------------------------------------------------
-    #   on_member_update: se o nick sair do padrão, remove cargo
-    # ------------------------------------------------------------
+    # =======================================================
+    #   3) Listener on_member_update
+    # =======================================================
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
-        if after.bot or after.id == after.guild.owner_id:
-            return
-        if before.nick == after.nick:
+        # Ignora bots e se não mudou nick
+        if after.bot or before.nick == after.nick:
             return
 
-        was_verified = before.nick and NICK_REGEX.match(before.nick)
-        is_still_verified = after.nick and NICK_REGEX.match(after.nick)
+        # Carrega config
+        config = self.get_guild_config(after.guild.id)
+        if not config:
+            return
+
+        # Checa se saiu do padrão
+        was_verified = bool(before.nick and NICK_REGEX.match(before.nick))
+        is_still_verified = bool(after.nick and NICK_REGEX.match(after.nick))
 
         if was_verified and not is_still_verified:
-            # Avisamos no system_channel e removemos cargo de verificado
-            guild = after.guild
-            system_channel = guild.system_channel
-            if system_channel:
-                embed = discord.Embed(
-                    title="Alerta de Nickname",
-                    description=(
-                        f"{after.mention}, seu apelido saiu do formato. "
-                        "Você perderá o cargo de verificado!"
-                    ),
-                    color=COR_ALERTA
-                )
-                await system_channel.send(embed=embed)
+            # Remover cargo verificado
+            if config.verificado_role_id:
+                role = after.guild.get_role(int(config.verificado_role_id))
+                if role and role in after.roles:
+                    try:
+                        await after.remove_roles(role)
+                    except:
+                        pass
+            # Logar
+            await self.logar(
+                after.guild,
+                f"{after} perdeu cargo verificado ao alterar o apelido fora do padrão.",
+                config
+            )
 
-            role = guild.get_role(VERIFICADO_ROLE_ID)
-            if role and role in after.roles:
-                try:
-                    await after.remove_roles(role)
-                    await self.logar(f"Removeu cargo verificado de {after}, apelido inválido.")
-                except discord.Forbidden:
-                    await self.logar(f"Não consegui remover cargo verificado de {after}.")
-
-    # ------------------------------------------------------------
-    #   Slash command /mudar_nick
-    #   (Se quiser que mantenha mesmo regime de apagar msg, 
-    #   lembre que slash commands não geram 'mensagem' do usuário.)
-    # ------------------------------------------------------------
+    # =======================================================
+    #   4) Slash Command /mudar_nick (opcional)
+    # =======================================================
     @app_commands.command(name="mudar_nick", description="Altera seu apelido verificado.")
     async def mudar_nick(self, interaction: discord.Interaction, dados: str):
-        member = interaction.user
-        guild = member.guild
-        channel = interaction.channel
+        await interaction.response.defer(ephemeral=True)
 
-        if channel.id != VERIFICATION_CHANNEL_ID:
-            await interaction.response.send_message(
-                "Este comando só pode ser usado no canal de verificação.",
+        guild = interaction.guild
+        if not guild:
+            return
+
+        config = self.get_guild_config(guild.id)
+        if not config or not config.verification_channel_id:
+            await interaction.followup.send(
+                "Este servidor não está configurado para verificação.",
                 ephemeral=True
             )
             return
 
-        # Se não está verificado, poderia forçar a verificação normal
-        # ou permitir mesmo assim. Fica a seu critério:
-        # if not await self.is_verified(member):
-        #     ...
+        # Exigir que esteja no canal de verificação
+        if str(interaction.channel_id) != config.verification_channel_id:
+            await interaction.followup.send(
+                "Este comando só pode ser usado no canal de verificação configurado.",
+                ephemeral=True
+            )
+            return
 
         parts = dados.split(',')
         game_name = parts[0].strip()
         if len(parts) > 1:
             discord_name = parts[1].strip()
         else:
-            discord_name = member.display_name
+            discord_name = interaction.user.display_name
 
         # Validação
-        ok, erro = validar_nomes(game_name, discord_name)
+        ok, erro_msg = validar_nomes(game_name, discord_name)
         if not ok:
-            await interaction.response.send_message(erro, ephemeral=True)
+            await interaction.followup.send(erro_msg, ephemeral=True)
             return
 
         novo_nick = f"[{game_name}] - {discord_name}"
         if len(novo_nick) > 32:
-            await interaction.response.send_message(
-                "O apelido final ultrapassa 32 caracteres. Tente encurtar.",
+            await interaction.followup.send(
+                "O apelido excede 32 caracteres, tente encurtar.",
                 ephemeral=True
             )
             return
 
+        # Tentar editar
         try:
-            await member.edit(nick=novo_nick)
+            await interaction.user.edit(nick=novo_nick)
         except discord.Forbidden:
-            await interaction.response.send_message(
-                "Não tenho permissão para alterar seu apelido.",
+            await interaction.followup.send(
+                "Não tenho permissão/hierarquia para alterar seu apelido.",
                 ephemeral=True
             )
             return
         except Exception as e:
-            await self.logar(f"[ERRO] Slash /mudar_nick: {e}")
-            await interaction.response.send_message("Erro inesperado.", ephemeral=True)
+            await self.logar(guild, f"[ERRO] /mudar_nick: {e}", config)
+            await interaction.followup.send("Erro ao alterar apelido. Tente mais tarde.", ephemeral=True)
             return
 
-        # Tenta adicionar cargo verificado
-        role = guild.get_role(VERIFICADO_ROLE_ID)
-        if role and role not in member.roles:
-            try:
-                await member.add_roles(role)
-            except discord.Forbidden:
-                await self.logar(f"[ERRO] Não pude adicionar cargo verificado ao {member}.")
+        # Salvar no DB
+        session = SessionLocal()
+        try:
+            p = session.query(PlayerName).filter_by(discord_id=str(interaction.user.id)).first()
+            if not p:
+                p = PlayerName(discord_id=str(interaction.user.id), in_game_name=novo_nick)
+                session.add(p)
+            else:
+                p.in_game_name = novo_nick
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            print(f"[ERRO DB] {e}")
+        finally:
+            session.close()
 
-        await interaction.response.send_message(
-            f"Seu apelido foi alterado para: `{novo_nick}`",
+        # Adiciona cargo verificado
+        if config.verificado_role_id:
+            cargo_verif = guild.get_role(int(config.verificado_role_id))
+            if cargo_verif and cargo_verif not in interaction.user.roles:
+                try:
+                    await interaction.user.add_roles(cargo_verif)
+                except:
+                    pass
+
+        await interaction.followup.send(
+            f"Seu apelido foi alterado para `{novo_nick}` com sucesso!",
             ephemeral=True
         )
+        await self.logar(guild, f"{interaction.user} alterou apelido para '{novo_nick}'.", config)
 
-    # ------------------------------------------------------------
-    #   is_verified (checa via regex ou cargo, etc.)
-    # ------------------------------------------------------------
-    async def is_verified(self, member: discord.Member) -> bool:
-        # Aqui pode checar só cargo OU cargo+regex
-        # Se quiser checar DB, fique à vontade. Exemplo:
-        # if not member.nick or not NICK_REGEX.match(member.nick):
-        #     return False
-        # return True se cargo de verificado
-        role = member.guild.get_role(VERIFICADO_ROLE_ID)
-        return bool(role and (role in member.roles))
-
-    # ------------------------------------------------------------
-    #   Apagar mensagem com try/except
-    # ------------------------------------------------------------
-    async def apagar_mensagem(self, message: discord.Message):
+    # =======================================================
+    #   Funções Auxiliares
+    # =======================================================
+    def get_guild_config(self, guild_id: int) -> GuildConfig:
+        """Obtém (ou None) as configs salvas no DB para este guild."""
+        session = SessionLocal()
         try:
-            await message.delete()
-        except discord.Forbidden:
-            pass
+            return session.query(GuildConfig).filter_by(guild_id=str(guild_id)).first()
+        finally:
+            session.close()
 
-    # ------------------------------------------------------------
-    #   Mandar embed de erro temporário e apagar a msg do user
-    # ------------------------------------------------------------
-    async def mandar_erro_e_apagar(self, message: discord.Message, texto: str):
+    async def is_verified(self, member: discord.Member, config: GuildConfig) -> bool:
+        """
+        Checa se o membro tem cargo verificado E apelido no formato.
+        Se quiser usar DB (PlayerName) também, pode.
+        """
+        if not config.verificado_role_id:
+            return False
+        role = member.guild.get_role(int(config.verificado_role_id))
+        # Se tiver cargo verificado e o apelido estiver no formato, consideramos verificado
+        return bool(
+            role in member.roles and
+            member.nick and
+            NICK_REGEX.match(member.nick)
+        )
+
+    async def apagar_e_alertar(self, message: discord.Message, texto_erro: str):
+        """Apaga a mensagem original e envia uma embed de erro temporária."""
         embed = discord.Embed(
-            title="Erro de Verificação",
-            description=texto,
+            title="Verificação Inválida",
+            description=f"{message.author.mention}, {texto_erro}",
             color=COR_ERRO
         )
         msg_erro = await message.channel.send(embed=embed)
-        # Apaga a mensagem do user
-        await self.apagar_mensagem(message)
-        # Apaga a mensagem de erro após ~10s
+
+        # Apaga a mensagem do usuário
+        try:
+            await message.delete()
+        except:
+            pass
+
+        # Apaga a mensagem de erro após alguns segundos
         await asyncio.sleep(10)
         try:
             await msg_erro.delete()
-        except discord.Forbidden:
+        except:
             pass
 
-    # ------------------------------------------------------------
-    #   Logar ações no canal de logs
-    # ------------------------------------------------------------
-    async def logar(self, texto: str):
-        canal_log = self.bot.get_channel(LOG_CHANNEL_ID)
-        if canal_log:
-            try:
-                data_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                await canal_log.send(f"[{data_str}] {texto}")
-            except discord.Forbidden:
-                pass
+    async def logar(self, guild: discord.Guild, texto: str, config: GuildConfig):
+        """Envia logs no canal configurado, se houver um canal de log."""
+        if not config.log_channel_id:
+            return
+        canal = guild.get_channel(int(config.log_channel_id))
+        if not canal:
+            return
+        data_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            await canal.send(f"[{data_str}] {texto}")
+        except:
+            pass
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VerificacaoCog(bot))
