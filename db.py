@@ -3,18 +3,22 @@ from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-# ✅ Verifica se DATABASE_URL está configurada
+# Verifica se a variável de ambiente DATABASE_URL está definida
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("❌ ERRO: A variável de ambiente DATABASE_URL não está definida.")
 
-# ✅ Cria conexão com o banco
+# Cria a engine de conexão
 engine = create_engine(DATABASE_URL, echo=False, pool_size=10, max_overflow=20)
+
+# Sessão para interagir com o banco
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Base declarativa
 Base = declarative_base()
 
 # ---------------------------------------------------
-# Tabela ServerConfig
+# Tabela ServerConfig (já existente)
 # ---------------------------------------------------
 class ServerConfig(Base):
     __tablename__ = "server_config"
@@ -27,7 +31,7 @@ class ServerConfig(Base):
     channel_id = Column(String, nullable=False)
 
 # ---------------------------------------------------
-# Tabela ServerStatusConfig
+# Tabela ServerStatusConfig (já existente)
 # ---------------------------------------------------
 class ServerStatusConfig(Base):
     __tablename__ = "server_status_config"
@@ -39,7 +43,7 @@ class ServerStatusConfig(Base):
     message_id = Column(String, nullable=False)
 
 # ---------------------------------------------------
-# Tabela PlayerName
+# Tabela PlayerName (já existente)
 # ---------------------------------------------------
 class PlayerName(Base):
     __tablename__ = "player_name"
@@ -48,7 +52,21 @@ class PlayerName(Base):
     discord_id = Column(String, unique=True, index=True, nullable=False)
     in_game_name = Column(String, nullable=False)
 
-# ✅ Cria as tabelas se não existirem
+# ---------------------------------------------------
+# Tabela GuildConfig (NOVA) - para verificação/etc.
+# ---------------------------------------------------
+class GuildConfig(Base):
+    __tablename__ = "guild_config"
+
+    id = Column(Integer, primary_key=True, index=True)
+    guild_id = Column(String, unique=True, index=True, nullable=False)
+    verification_channel_id = Column(String, nullable=True)
+    log_channel_id          = Column(String, nullable=True)
+    staff_role_id           = Column(String, nullable=True)
+    verificado_role_id      = Column(String, nullable=True)
+    # Se quiser mais campos (wait_time, etc.), adicione aqui.
+
+# Cria as tabelas se não existirem
 try:
     Base.metadata.create_all(engine, checkfirst=True)
     print("✅ Banco de dados configurado corretamente.")
