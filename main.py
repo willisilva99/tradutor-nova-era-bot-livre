@@ -85,7 +85,8 @@ async def load_cogs():
         "cogs.ajuda_completa",
         "cogs.arcano",
         "cogs.nome",
-        # Se quiser usar seu cog de verificação:
+         "cogs.temporario"   
+    
     ]
     for cog in cogs:
         try:
