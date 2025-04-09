@@ -3,7 +3,7 @@ import discord
 from discord.ext import commands
 import asyncio
 from datetime import datetime
-from discord import app_commands  # Para comandos de slash
+from discord import app_commands  # Para comandos slash
 
 from db import SessionLocal, PlayerName
 
@@ -18,20 +18,21 @@ COR_ALERTA   = discord.Color.yellow()
 ########################################
 # OUTRAS CONFIGURAÇÕES
 ########################################
-WAIT_TIME = 60  # Tempo de espera (em segundos) para o usuário responder
-LOG_CHANNEL_ID = 978460787586789406  # Canal de logs
-STAFF_ROLE_ID = 978464190979260426   # Cargo da staff
-VERIFICADO_ROLE_ID = 978444009536094269  # Cargo que será atribuído ao membro verificado
+WAIT_TIME = 60  # Tempo (segundos) para esperar a entrada válida do usuário
+LOG_CHANNEL_ID = 978460787586789406  # ID do canal de logs
+STAFF_ROLE_ID = 978464190979260426   # ID do cargo da staff
+VERIFICADO_ROLE_ID = 978444009536094269  # ID do cargo de verificado
 VERIFICATION_CHANNEL_ID = 1359135729409589468  # Canal de verificação
 
-# Regex para validar internamente o formato de apelido (para on_member_update, etc.)
+# Esta regex é usada para validar internamente se o nick está no padrão (para on_member_update)
+# O padrão (não exibido) espera: [NomeDoJogo] - NomeDiscord
 NICK_REGEX = re.compile(r'^\[.+\]\s*-\s*.+$')
 
 def extrair_dados(input_str: str, member: discord.Member) -> tuple:
     """
-    Extrai o nome do jogo e o nome do Discord do input.
-    Se houver vírgula, o primeiro valor é o nome do jogo e o segundo é o nome do Discord;
-    caso contrário, usa member.display_name.
+    Extrai os dados do input do usuário.
+    Se houver uma vírgula, o primeiro valor é o nome do jogo e o segundo é o nome do Discord.
+    Se não houver, usa member.display_name para o nome do Discord.
     Retorna (game_name, discord_name)
     """
     parts = input_str.split(',')
@@ -42,79 +43,71 @@ def extrair_dados(input_str: str, member: discord.Member) -> tuple:
 class VerificacaoCog(commands.Cog):
     """
     Cog que gerencia o fluxo de verificação e alteração de apelido
-    exclusivamente no canal de verificação.
+    no canal de verificação.
     """
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Armazena IDs dos membros que estão aguardando resposta
+        # Armazena os IDs dos membros que estão aguardando entrada (para evitar processamento duplicado)
         self.waiting_for_name = {}
-        # Armazena a contagem de erros de cada membro
+        # Armazena a quantidade de erros de cada membro (member.id => erro_count)
         self.error_counts = {}
 
     # -------------------------------------------------------------------
-    # Fluxo Automático de Verificação no canal designado
+    # Fluxo Automático de Verificação no Canal de Verificação
     # -------------------------------------------------------------------
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # Processa somente mensagens enviadas no canal de verificação
+        # Processa apenas mensagens enviadas no canal de verificação
         if message.channel.id != VERIFICATION_CHANNEL_ID:
             return
-        if message.author.bot:
+        if message.author.bot or isinstance(message.channel, discord.DMChannel):
             return
 
         member = message.author
         channel = message.channel
         guild = member.guild
 
-        # Ignore o dono do servidor
+        # Ignora o dono do servidor
         if member.id == guild.owner_id:
             return
 
-        # Se o membro já estiver verificado, apaga a mensagem para manter o canal limpo
+        # Se o membro já está verificado, não processa – mantém a mensagem enviada.
         if await self.is_verified(member):
-            try:
-                await message.delete()
-            except discord.Forbidden:
-                pass
             return
 
-        # Se a mensagem for um comando de alteração (“mudar nick”), deixamos para o comando de slash.
+        # Se a mensagem for "mudar nick", deixa que o comando slash trate (não processa aqui)
         if message.content.lower().strip() == "mudar nick":
-            try:
-                await message.delete()
-            except discord.Forbidden:
-                pass
             return
 
-        # Verifica se o membro já está em fluxo; se sim, apaga mensagens extras
+        # Se o membro já estiver em fluxo, ignora mensagens extras (para evitar duplicidade)
         if member.id in self.waiting_for_name:
-            try:
-                await message.delete()
-            except discord.Forbidden:
-                pass
             return
 
-        # Inicia fluxo e registra timestamp (caso queira tratar mensagens duplicadas)
+        # Registra o timestamp dessa entrada para controle (se desejar)
         self.waiting_for_name[member.id] = asyncio.get_event_loop().time()
 
-        # Não apaga a mensagem válida enviada – pois queremos manter ela no canal se estiver correta.
-        # Processa os dados da mensagem do usuário
+        # Processa a mensagem do usuário como tentativa de verificação
         game_name, discord_name = extrair_dados(message.content, member)
+
+        # Se não houver nome do jogo, entrada inválida
         if not game_name:
-            # Se o nome do jogo estiver vazio, trata como erro
             self.increment_error(member.id)
             error_embed = discord.Embed(
                 title="Erro na Verificação",
-                description=(f"{member.mention}, você deve informar o nome do jogo. Tente novamente."),
+                description=f"{member.mention}, o nome do jogo não pode estar vazio. Tente novamente.",
                 color=COR_ERRO
             )
             error_msg = await channel.send(embed=error_embed)
+            try:
+                await message.delete()
+            except discord.Forbidden:
+                pass
             await asyncio.sleep(30)
             try:
                 await error_msg.delete()
             except discord.Forbidden:
                 pass
-            del self.waiting_for_name[member.id]
+            self.waiting_for_name.pop(member.id, None)
             if self.error_counts.get(member.id, 0) >= 3:
                 await self.enviar_instrucao(member, channel)
                 self.error_counts[member.id] = 0
@@ -122,30 +115,19 @@ class VerificacaoCog(commands.Cog):
 
         novo_nick = f"[{game_name}] - {discord_name}"
 
-        # Tenta alterar o apelido
         try:
+            # Tenta alterar o apelido
             await member.edit(nick=novo_nick)
         except discord.Forbidden:
-            error_perm = await channel.send(f"{member.mention}, não consigo alterar seu apelido. Fale com um administrador.")
-            del self.waiting_for_name[member.id]
-            await asyncio.sleep(30)
-            try:
-                await error_perm.delete()
-            except discord.Forbidden:
-                pass
+            await channel.send(f"{member.mention}, não tenho permissão para alterar seu apelido. Fale com um administrador.")
+            self.waiting_for_name.pop(member.id, None)
             return
         except Exception as e:
             await self.logar(f"[ERRO] ao editar apelido de {member}: {e}")
-            del self.waiting_for_name[member.id]
+            self.waiting_for_name.pop(member.id, None)
             return
 
-        # Adiciona uma reação de confirmação à mensagem do usuário
-        try:
-            await message.add_reaction("✅")
-        except discord.Forbidden:
-            pass
-
-        # Salva o apelido final no DB
+        # Salva o novo apelido no DB
         self.salvar_in_game_name(member.id, novo_nick)
 
         # Atribui o cargo de verificado
@@ -156,21 +138,25 @@ class VerificacaoCog(commands.Cog):
             except discord.Forbidden:
                 await self.logar(f"[ERRO] Não pude atribuir o cargo de verificado para {member}.")
 
-        # Envia embed de sucesso (que ficará 30 segundos e depois será apagado)
+        # Adiciona uma reação "✅" na mensagem do usuário para indicar sucesso
+        try:
+            await message.add_reaction("✅")
+        except discord.Forbidden:
+            pass
+
+        # Envia embed de sucesso (público)
         embed_sucesso = discord.Embed(
             title="Verificação Concluída",
-            description=(f"✅ {member.mention}, seu novo apelido é **`{novo_nick}`**.\nVocê está liberado para conversar!"),
+            description=f"✅ {member.mention}, seu novo apelido é **`{novo_nick}`**. Você está verificado e liberado!",
             color=COR_SUCESSO
         )
         sucesso_msg = await channel.send(embed=embed_sucesso)
         await self.logar(f"O usuário {member} verificou seu apelido como '{novo_nick}'.")
 
-        # Remove o membro do fluxo e reinicia contador de erro
-        if member.id in self.waiting_for_name:
-            del self.waiting_for_name[member.id]
         self.reset_error(member.id)
+        self.waiting_for_name.pop(member.id, None)
 
-        # Apaga o embed de sucesso após 30 segundos (mantendo a mensagem do usuário intacta)
+        # Apaga o embed de sucesso após 30 segundos, mas mantém a mensagem do usuário
         await asyncio.sleep(30)
         try:
             await sucesso_msg.delete()
@@ -178,7 +164,7 @@ class VerificacaoCog(commands.Cog):
             pass
 
     # -------------------------------------------------------------------
-    # Comando Slash para alterar Nick (para membros já verificados)
+    # Comando Slash para Alterar o Nick (para membros já verificados)
     # -------------------------------------------------------------------
     @app_commands.command(name="mudar_nick", description="Altera seu apelido verificado.")
     async def mudar_nick(self, interaction: discord.Interaction, dados: str):
@@ -186,12 +172,10 @@ class VerificacaoCog(commands.Cog):
         guild = member.guild
         channel = interaction.channel
 
-        # Verifica se o comando foi usado no canal de verificação
         if channel.id != VERIFICATION_CHANNEL_ID:
             await interaction.response.send_message("Este comando só pode ser usado no canal de verificação.", ephemeral=True)
             return
 
-        # Apenas membros verificados podem usar este comando
         if not await self.is_verified(member):
             await interaction.response.send_message("Você ainda não está verificado. Use /verify para se verificar.", ephemeral=True)
             return
@@ -215,7 +199,7 @@ class VerificacaoCog(commands.Cog):
             try:
                 await member.add_roles(verificado_role)
             except discord.Forbidden:
-                await self.logar(f"[ERRO] Não pude atribuir o cargo de verificado a {member}.")
+                await self.logar(f"[ERRO] Não pude atribuir o cargo de verificado para {member}.")
 
         embed_conf = discord.Embed(
             title="Alteração de Nickname Concluída",
@@ -226,7 +210,7 @@ class VerificacaoCog(commands.Cog):
         await self.logar(f"O usuário {member} alterou seu apelido para '{novo_nick}'.")
 
     # -------------------------------------------------------------------
-    # Listener on_member_update: Se o nick for alterado para um formato inválido
+    # Listener on_member_update: Se o nick verificado for alterado incorretamente
     # -------------------------------------------------------------------
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
@@ -242,10 +226,7 @@ class VerificacaoCog(commands.Cog):
             system_channel = guild.system_channel
             embed_alerta = discord.Embed(
                 title="Alerta de Nickname",
-                description=(
-                    f"{after.mention}, seu apelido saiu do formato verificado.\n"
-                    "Mantenha o formato ou poderá ser punido!"
-                ),
+                description=f"{after.mention}, seu apelido saiu do formato verificado. Mantenha o formato ou poderá ser punido!",
                 color=COR_ALERTA
             )
             if system_channel:
@@ -262,7 +243,7 @@ class VerificacaoCog(commands.Cog):
                     await self.logar(f"[ERRO] Não consegui remover o cargo de {after}.")
 
     # -------------------------------------------------------------------
-    # Função auxiliar: checa se o membro está verificado
+    # Função auxiliar: Checa se o membro está verificado (apenas se tiver registro no DB)
     # -------------------------------------------------------------------
     async def is_verified(self, member: discord.Member) -> bool:
         if not member.nick or not NICK_REGEX.match(member.nick):
@@ -275,7 +256,7 @@ class VerificacaoCog(commands.Cog):
             session.close()
 
     # -------------------------------------------------------------------
-    # Função auxiliar: salva o apelido no DB
+    # Função auxiliar: Salva o apelido no DB
     # -------------------------------------------------------------------
     def salvar_in_game_name(self, discord_id: int, nickname: str):
         session = SessionLocal()
@@ -307,29 +288,27 @@ class VerificacaoCog(commands.Cog):
                 print("[ERRO] Permissão negada para enviar logs no canal de log.")
 
     # -------------------------------------------------------------------
-    # Função auxiliar: Incrementa erro para um membro
+    # Função auxiliar: Incrementa contagem de erros para um membro
     # -------------------------------------------------------------------
     def increment_error(self, member_id: int):
         self.error_counts[member_id] = self.error_counts.get(member_id, 0) + 1
 
     # -------------------------------------------------------------------
-    # Função auxiliar: Reseta erro para um membro
+    # Função auxiliar: Reseta contagem de erros para um membro
     # -------------------------------------------------------------------
     def reset_error(self, member_id: int):
-        if member_id in self.error_counts:
-            self.error_counts[member_id] = 0
+        self.error_counts[member_id] = 0
 
     # -------------------------------------------------------------------
-    # Se o usuário errar 3 vezes, envia uma instrução adicional por 30 segundos
+    # Se o membro errar 3 vezes, envia mensagem instrucional por 30 segundos
     # -------------------------------------------------------------------
     async def enviar_instrucao(self, member: discord.Member, channel: discord.TextChannel):
         instr_embed = discord.Embed(
             title="Dica para Verificação",
             description=(
-                "Para se verificar corretamente, envie seu nome no jogo e, se desejar, seu nome no Discord,\n"
-                "separados por uma vírgula.\n"
+                "Para se verificar corretamente, envie seu nome do jogo e, se quiser, seu nome do Discord, separados por vírgula.\n"
                 "Exemplo: `Jão, Fulano`\n"
-                "Se você não quiser alterar seu nome no Discord, envie apenas o nome do jogo."
+                "Se não quiser alterar seu nome no Discord, envie apenas o nome do jogo."
             ),
             color=COR_PADRAO
         )
