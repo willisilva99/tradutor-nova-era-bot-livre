@@ -1,74 +1,105 @@
 import os
-from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
-from sqlalchemy.orm import declarative_base, sessionmaker
+import asyncio
+import random
+import discord
+from discord.ext import commands, tasks
 
-# Verifica se a variável de ambiente DATABASE_URL está definida
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("❌ ERRO: A variável de ambiente DATABASE_URL não está definida.")
+# Importe seu DB e a conexão do sevendays
+from db import SessionLocal, ServerConfig
+from cogs.sevendays import TelnetConnection, active_connections
 
-# Cria a engine de conexão
-engine = create_engine(DATABASE_URL, echo=False, pool_size=10, max_overflow=20)
+TOKEN = os.getenv("TOKEN")
 
-# Sessão para interagir com o banco
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+intents = discord.Intents.default()
+intents.messages = True
+intents.message_content = True
+intents.guilds = True
 
-# Base declarativa
-Base = declarative_base()
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ---------------------------------------------------
-# Tabela ServerConfig (já existente)
-# ---------------------------------------------------
-class ServerConfig(Base):
-    __tablename__ = "server_config"
+STATUS_LIST = [
+    "traduzindo",
+    "matando zumbis",
+    "falando com Willi",
+    "nova era PvE"
+]
 
-    id = Column(Integer, primary_key=True, index=True)
-    guild_id = Column(String, index=True, nullable=False)
-    ip = Column(String, nullable=False)
-    port = Column(Integer, nullable=False)
-    password = Column(String, nullable=True)
-    channel_id = Column(String, nullable=False)
+@tasks.loop(minutes=5)
+async def change_status():
+    status = random.choice(STATUS_LIST)
+    await bot.change_presence(activity=discord.Game(name=status))
+    print(f"Status atualizado para: {status}")
 
-# ---------------------------------------------------
-# Tabela ServerStatusConfig (já existente)
-# ---------------------------------------------------
-class ServerStatusConfig(Base):
-    __tablename__ = "server_status_config"
+@bot.event
+async def on_ready():
+    if getattr(bot, "ready_flag", False):
+        return  # Se já rodou uma vez, não executa novamente
 
-    id = Column(Integer, primary_key=True, index=True)
-    guild_id = Column(String, unique=True, index=True, nullable=False)
-    server_key = Column(String, nullable=False)
-    channel_id = Column(String, nullable=False)
-    message_id = Column(String, nullable=False)
+    bot.ready_flag = True
+    print(f"✅ Bot conectado como {bot.user}")
 
-# ---------------------------------------------------
-# Tabela PlayerName (já existente)
-# ---------------------------------------------------
-class PlayerName(Base):
-    __tablename__ = "player_name"
+    # Sincroniza comandos de slash
+    await bot.tree.sync()
+    print("✅ Comandos de Slash sincronizados!")
 
-    id = Column(Integer, primary_key=True, index=True)
-    discord_id = Column(String, unique=True, index=True, nullable=False)
-    in_game_name = Column(String, nullable=False)
+    if not change_status.is_running():
+        change_status.start()
 
-# ---------------------------------------------------
-# Tabela GuildConfig (NOVA) - para verificação/etc.
-# ---------------------------------------------------
-class GuildConfig(Base):
-    __tablename__ = "guild_config"
+    # Restaura as conexões Telnet do DB
+    restore_telnet_connections()
+    print("Bot está pronto!")
 
-    id = Column(Integer, primary_key=True, index=True)
-    guild_id = Column(String, unique=True, index=True, nullable=False)
-    verification_channel_id = Column(String, nullable=True)
-    log_channel_id          = Column(String, nullable=True)
-    staff_role_id           = Column(String, nullable=True)
-    verificado_role_id      = Column(String, nullable=True)
-    # Se quiser mais campos (wait_time, etc.), adicione aqui.
+def restore_telnet_connections():
+    """Restaura conexões Telnet do banco de dados."""
+    with SessionLocal() as session:
+        configs = session.query(ServerConfig).all()
+        for cfg in configs:
+            try:
+                guild_id = cfg.guild_id
+                # Se já tiver conexão ativa para esse guild, encerra e recria
+                if guild_id in active_connections:
+                    active_connections[guild_id].stop()
+                    del active_connections[guild_id]
 
-# Cria as tabelas se não existirem
-try:
-    Base.metadata.create_all(engine, checkfirst=True)
-    print("✅ Banco de dados configurado corretamente.")
-except Exception as e:
-    print(f"❌ ERRO ao configurar o banco de dados: {e}")
+                conn = TelnetConnection(
+                    guild_id=guild_id,
+                    ip=cfg.ip,
+                    port=cfg.port,
+                    password=cfg.password,
+                    channel_id=cfg.channel_id,
+                    bot=bot
+                )
+                active_connections[guild_id] = conn
+                conn.start()
+            except Exception as e:
+                print(f"❌ Erro ao restaurar Telnet para {guild_id}: {e}")
+    print("✅ Conexões Telnet restauradas a partir do DB.")
+
+async def load_cogs():
+    # Adicione aqui todos os cogs que quer carregar
+    cogs = [
+        "cogs.admin",
+        "cogs.utility",
+        "cogs.sevendays",
+        "cogs.serverstatus",
+        "cogs.ajuda_completa",
+        "cogs.arcano",
+        "cogs.nome",
+        # Se quiser usar seu cog de verificação:
+    ]
+    for cog in cogs:
+        try:
+            await bot.load_extension(cog)
+            print(f"✅ Cog carregado: {cog}")
+        except Exception as e:
+            print(f"❌ Erro ao carregar {cog}: {e}")
+
+async def main():
+    await load_cogs()
+    if not TOKEN:
+        print("❌ ERRO: Variável de ambiente TOKEN não encontrada.")
+        return
+    await bot.start(TOKEN)
+
+if __name__ == "__main__":
+    asyncio.run(main())
