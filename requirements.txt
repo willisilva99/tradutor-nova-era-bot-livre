@@ -1,5 +1,5 @@
 discord.py==2.2.3
-youtube_dl==2021.12.17
+yt-dlp==2023.3.4
 googletrans
 SQLAlchemy==2.0.0
 psycopg2-binary==2.9.6
