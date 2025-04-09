@@ -1,4 +1,3 @@
-# verificacao_cog.py
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -30,6 +29,8 @@ def validar_nomes(game_name: str, discord_name: str) -> tuple[bool, str]:
 class VerificacaoCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # Dicionário para contar quantas vezes cada user errou (user_id -> int)
+        self.error_counts = {}
 
     # =======================================================
     #   1) Comandos Slash de Configuração do Servidor
@@ -181,7 +182,6 @@ class VerificacaoCog(commands.Cog):
         member = message.author
         # Se o membro já estiver verificado, podemos apagar a msg ou ignorar
         if await self.is_verified(member, config):
-            # Exemplo: apagar a mensagem
             try:
                 await message.delete()
             except:
@@ -189,7 +189,6 @@ class VerificacaoCog(commands.Cog):
             return
 
         # Tenta processar a mensagem como verificação:
-        # Usar "Jogo, NomeDiscord" para separar
         parts = message.content.split(',')
         game_name = parts[0].strip()
         if len(parts) > 1:
@@ -200,27 +199,36 @@ class VerificacaoCog(commands.Cog):
         # Valida
         ok, msg_erro = validar_nomes(game_name, discord_name)
         if not ok:
-            await self.apagar_e_alertar(message, msg_erro)
+            # Caso de erro: incrementa contagem e exibe alerta
+            await self.increment_and_handle_error(message, msg_erro)
             return
 
         # Monta o novo nick
         novo_nick = f"[{game_name}] - {discord_name}"
         if len(novo_nick) > 32:
-            await self.apagar_e_alertar(message, "O apelido excede 32 caracteres, tente encurtar.")
+            await self.increment_and_handle_error(message, "O apelido excede 32 caracteres, tente encurtar.")
             return
 
         # Tenta editar o apelido
         try:
             await member.edit(nick=novo_nick)
         except discord.Forbidden:
-            await self.apagar_e_alertar(
-                message, "Não tenho permissão/hierarquia para alterar seu apelido."
+            await self.increment_and_handle_error(
+                message,
+                "Não tenho permissão/hierarquia para alterar seu apelido."
             )
             return
         except Exception as e:
-            await self.logar(message.guild, f"[ERRO] ao editar apelido de {member}: {e}", config)
-            await self.apagar_e_alertar(message, "Ocorreu um erro ao alterar seu apelido.")
+            await self.logar(
+                message.guild,
+                f"[ERRO] ao editar apelido de {member}: {e}",
+                config
+            )
+            await self.increment_and_handle_error(message, "Ocorreu um erro ao alterar seu apelido.")
             return
+
+        # Se chegou até aqui, deu certo: reseta contagem de erros
+        self.reset_error_count(member.id)
 
         # Salvar no DB (PlayerName)
         session = SessionLocal()
@@ -279,7 +287,7 @@ class VerificacaoCog(commands.Cog):
             pass
 
     # =======================================================
-    #   3) Listener on_member_update
+    #   3) Listener on_member_update (remover cargo se mudar)
     # =======================================================
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
@@ -292,7 +300,6 @@ class VerificacaoCog(commands.Cog):
         if not config:
             return
 
-        # Checa se saiu do padrão
         was_verified = bool(before.nick and NICK_REGEX.match(before.nick))
         is_still_verified = bool(after.nick and NICK_REGEX.match(after.nick))
 
@@ -313,7 +320,7 @@ class VerificacaoCog(commands.Cog):
             )
 
     # =======================================================
-    #   4) Slash Command /mudar_nick (opcional)
+    #   4) Slash Command /mudar_nick
     # =======================================================
     @app_commands.command(name="mudar_nick", description="Altera seu apelido verificado.")
     async def mudar_nick(self, interaction: discord.Interaction, dados: str):
@@ -406,7 +413,7 @@ class VerificacaoCog(commands.Cog):
         await self.logar(guild, f"{interaction.user} alterou apelido para '{novo_nick}'.", config)
 
     # =======================================================
-    #   Funções Auxiliares
+    #   5) Funções Auxiliares
     # =======================================================
     def get_guild_config(self, guild_id: int) -> GuildConfig:
         """Obtém (ou None) as configs salvas no DB para este guild."""
@@ -424,7 +431,6 @@ class VerificacaoCog(commands.Cog):
         if not config.verificado_role_id:
             return False
         role = member.guild.get_role(int(config.verificado_role_id))
-        # Se tiver cargo verificado e o apelido estiver no formato, consideramos verificado
         return bool(
             role in member.roles and
             member.nick and
@@ -453,9 +459,57 @@ class VerificacaoCog(commands.Cog):
         except:
             pass
 
+    def increment_error_count(self, user_id: int) -> int:
+        """Incrementa o contador de erros de um usuário e retorna o novo total."""
+        atual = self.error_counts.get(user_id, 0)
+        atual += 1
+        self.error_counts[user_id] = atual
+        return atual
+
+    def reset_error_count(self, user_id: int):
+        """Reseta o contador de erros do usuário."""
+        self.error_counts[user_id] = 0
+
+    async def increment_and_handle_error(self, message: discord.Message, texto_erro: str):
+        """
+        Incrementa o erro do usuário. Se atingir 3, envia tutorial.
+        Caso contrário, apenas faz o fluxo normal de apagar_e_alertar.
+        """
+        count = self.increment_error_count(message.author.id)
+        await self.apagar_e_alertar(message, texto_erro)
+
+        if count >= 3:
+            # Envia tutorial e reseta contagem
+            await self.enviar_tutorial(message.channel, message.author)
+            self.reset_error_count(message.author.id)
+
+    async def enviar_tutorial(self, channel: discord.TextChannel, member: discord.Member):
+        """
+        Envia uma mensagem de tutorial que some após 30 segundos.
+        """
+        embed = discord.Embed(
+            title="Dica de Verificação",
+            description=(
+                f"{member.mention}, você errou 3 vezes a verificação.\n\n"
+                "**Exemplo de uso**:\n"
+                "Envie no chat: `MeuJogo, Fulano`\n\n"
+                "Isso definirá seu nick como `[MeuJogo] - Fulano`.\n"
+                "• Cada parte deve ter ao menos 3 caracteres.\n"
+                "• Não ultrapasse 32 caracteres no total."
+            ),
+            color=COR_ALERTA
+        )
+        msg_tutorial = await channel.send(embed=embed)
+
+        await asyncio.sleep(30)
+        try:
+            await msg_tutorial.delete()
+        except:
+            pass
+
     async def logar(self, guild: discord.Guild, texto: str, config: GuildConfig):
         """Envia logs no canal configurado, se houver um canal de log."""
-        if not config.log_channel_id:
+        if not config or not config.log_channel_id:
             return
         canal = guild.get_channel(int(config.log_channel_id))
         if not canal:
@@ -466,5 +520,24 @@ class VerificacaoCog(commands.Cog):
         except:
             pass
 
+    # =======================================================
+    #   6) ERRO PERSONALIZADO SE NÃO FOR ADMIN
+    # =======================================================
+    @commands.Cog.listener()
+    async def on_app_command_error(self, interaction: discord.Interaction, error):
+        """
+        Se um usuário tentar usar comandos que exigem admin, 
+        mostra nossa mensagem customizada em vez do "app não respondeu".
+        """
+        if isinstance(error, app_commands.MissingPermissions):
+            await interaction.response.send_message(
+                "Somente Administrador pode executar este comando!",
+                ephemeral=True
+            )
+        else:
+            # Se for outro erro, pode levantar ou tratar de outra forma
+            raise error
+
+# Função OBRIGATÓRIA para carregar este cog
 async def setup(bot: commands.Bot):
     await bot.add_cog(VerificacaoCog(bot))
