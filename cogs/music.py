@@ -3,13 +3,10 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 import functools
-
-# Se preferir usar yt-dlp, descomente a linha abaixo:
-# import yt_dlp as youtube_dl
-import youtube_dl
+import yt_dlp as youtube_dl  # Usando yt-dlp
 
 # ==================================================
-#   CONFIGURAÇÃO DO youtube_dl / yt-dlp
+#   CONFIGURAÇÃO DO yt-dlp
 # ==================================================
 YDL_OPTIONS = {
     "format": "bestaudio/best",
@@ -25,7 +22,7 @@ FFMPEG_OPTIONS = {
 }
 
 # --------------------------------------------------
-#   HELPER: Envia mensagem temporária (apaga após 30s)
+#   HELPER: Envia mensagem de resposta e apaga após 30 segundos
 # --------------------------------------------------
 async def send_temporary_message(
     interaction: discord.Interaction,
@@ -35,10 +32,9 @@ async def send_temporary_message(
     delay: int = 30
 ):
     """
-    Envia uma mensagem e a deleta após 'delay' segundos.
-    Use esta função para feedbacks temporários.
+    Envia uma mensagem (usando response se ainda não respondido ou followup)
+    e a deleta após 'delay' segundos.
     """
-    # Se a interação ainda não foi respondida, use interaction.response.
     if not interaction.response.is_done():
         await interaction.response.send_message(
             content=content,
@@ -53,7 +49,6 @@ async def send_temporary_message(
             embed=embed,
             view=view
         )
-
     await asyncio.sleep(delay)
     try:
         await msg.delete()
@@ -62,7 +57,7 @@ async def send_temporary_message(
     return msg
 
 # --------------------------------------------------
-#   Classe Track - Armazena info da música
+#   Classe Track - Armazena informações da música
 # --------------------------------------------------
 class Track:
     def __init__(self, source, title, url):
@@ -71,11 +66,11 @@ class Track:
         self.url = url
 
 # ======================================================================
-#   Modal para o "Play" - Pergunta URL ou Nome da Música
+#   Modal para "Play" - Pergunta a URL ou nome da música
 # ======================================================================
 class PlaySongModal(discord.ui.Modal, title="▶️ Tocar Música"):
     query = discord.ui.TextInput(
-        label="Informe o nome ou URL da música",
+        label="Nome / URL da música",
         style=discord.TextStyle.short,
         placeholder="Ex: https://youtube.com/...",
         required=True
@@ -90,7 +85,7 @@ class PlaySongModal(discord.ui.Modal, title="▶️ Tocar Música"):
         await self.cog.play_music(interaction, self.query.value)
 
 # ======================================================================
-#   View com os Botões do Painel de Música
+#   View com Botões para controle da música
 # ======================================================================
 class MusicView(discord.ui.View):
     def __init__(self, cog):
@@ -99,51 +94,44 @@ class MusicView(discord.ui.View):
 
     @discord.ui.button(label="Entrar", style=discord.ButtonStyle.green, emoji="🔊")
     async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Entra no canal de voz do usuário."""
         await self.cog.join_voice(interaction)
 
     @discord.ui.button(label="Play", style=discord.ButtonStyle.blurple, emoji="▶️")
     async def play_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Abre um modal para tocar música."""
         modal = PlaySongModal(self.cog, interaction)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Pause/Resume", style=discord.ButtonStyle.gray, emoji="⏯️")
     async def pause_resume_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Pausa ou retoma a música atual."""
         await self.cog.pause_resume(interaction)
 
     @discord.ui.button(label="Skip", style=discord.ButtonStyle.gray, emoji="⏭️")
     async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Pula a música atual."""
         await self.cog.skip_track(interaction)
 
     @discord.ui.button(label="Stop", style=discord.ButtonStyle.red, emoji="🛑")
     async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Para a música e limpa a fila."""
         await self.cog.stop_music(interaction)
 
     @discord.ui.button(label="Fila", style=discord.ButtonStyle.secondary, emoji="🎶")
     async def queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Mostra a fila de músicas."""
         await self.cog.show_queue(interaction)
 
     @discord.ui.button(label="Sair", style=discord.ButtonStyle.danger, emoji="🚪")
     async def leave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Faz o bot sair do canal de voz."""
         await self.cog.leave_voice(interaction)
 
 # ======================================================================
-#   Cog Principal de Música com Botões
+#   COG PRINCIPAL DE MÚSICA COM BOTÕES
 # ======================================================================
 class MusicButtonsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Fila de reprodução: guild_id -> [Track, Track, ...]
+        # Fila de reprodução por guild: guild_id -> lista de Track
         self.queues = {}
 
     # ------------------------------------------------------------------
-    #   /musicpanel - Envia o Painel de Música (permanece)
+    #     /musicpanel - Envia o painel com embed e botões (Permanente)
     # ------------------------------------------------------------------
     @app_commands.command(name="musicpanel", description="Exibe o painel de botões para controlar a música.")
     async def musicpanel(self, interaction: discord.Interaction):
@@ -157,26 +145,23 @@ class MusicButtonsCog(commands.Cog):
                 "⏭️ **Skip**: Pula a música atual.\n"
                 "🛑 **Stop**: Para a música e limpa a fila.\n"
                 "🎶 **Fila**: Exibe a fila de reprodução.\n"
-                "🚪 **Sair**: Bot sai do canal de voz.\n\n"
-                "Este painel permanecerá até ser manualmente removido."
+                "🚪 **Sair**: Bot sai do canal de voz."
             ),
             color=discord.Color.blurple()
         )
         view = MusicView(self)
-        # O painel é enviado sem auto-delete para que fique disponível
+        # Envia o painel que permanece (não é temporário)
         await interaction.response.send_message(embed=embed, view=view)
 
     # ------------------------------------------------------------------
-    #   Funções de Controle (Chamadas pelos Botões e Modals)
+    #     Funções chamadas pelos botões / modals
     # ------------------------------------------------------------------
     async def join_voice(self, interaction: discord.Interaction):
         user = interaction.user
         if not user.voice or not user.voice.channel:
             return await send_temporary_message(interaction, content="Você precisa estar em um canal de voz!")
-        
         channel = user.voice.channel
         voice_client = interaction.guild.voice_client
-        
         try:
             if voice_client and voice_client.is_connected():
                 await voice_client.move_to(channel)
@@ -186,33 +171,30 @@ class MusicButtonsCog(commands.Cog):
             return await send_temporary_message(interaction, content="❌ Não tenho permissão para entrar/mover para este canal de voz!")
         except Exception as e:
             return await send_temporary_message(interaction, content=f"❌ Erro ao conectar ao canal de voz: {e}")
-        
         await send_temporary_message(interaction, content=f"Entrei no canal de voz: **{channel}**")
 
     async def play_music(self, interaction: discord.Interaction, search: str):
         guild = interaction.guild
         voice_client = guild.voice_client
-        
         if not voice_client or not voice_client.is_connected():
             if not interaction.user.voice or not interaction.user.voice.channel:
                 return await send_temporary_message(interaction, content="Você não está em um canal de voz!")
             try:
                 await interaction.user.voice.channel.connect()
             except discord.Forbidden:
-                return await send_temporary_message(interaction, content="❌ Não tenho permissão para entrar neste canal de voz!")
+                return await send_temporary_message(interaction, content="❌ Não tenho permissão para entrar no canal de voz!")
             except Exception as e:
                 return await send_temporary_message(interaction, content=f"❌ Erro ao conectar ao canal de voz: {e}")
             voice_client = guild.voice_client
-        
+
         await send_temporary_message(interaction, content="Buscando...")
-        
         track = await self.get_track(search)
         if not track:
             return await send_temporary_message(interaction, content="❌ Não foi possível obter esta música.")
-        
+
         queue = self.queues.setdefault(guild.id, [])
         queue.append(track)
-        
+
         if not voice_client.is_playing():
             await self.play_next(guild)
             await send_temporary_message(interaction, content=f"🎶 Tocando agora: **{track.title}**")
@@ -223,7 +205,6 @@ class MusicButtonsCog(commands.Cog):
         voice_client = interaction.guild.voice_client
         if not voice_client or not voice_client.is_connected():
             return await send_temporary_message(interaction, content="O bot não está no canal de voz.")
-        
         if voice_client.is_paused():
             voice_client.resume()
             await send_temporary_message(interaction, content="▶️ Música retomada.")
@@ -270,7 +251,7 @@ class MusicButtonsCog(commands.Cog):
         await send_temporary_message(interaction, content="Saí do canal de voz!")
 
     # ------------------------------------------------------------------
-    #   LÓGICA INTERNA: tocar a fila, extrair informações do YouTube
+    #   Lógica Interna para tocar a fila e extrair informações via yt-dlp
     # ------------------------------------------------------------------
     async def play_next(self, guild: discord.Guild):
         voice_client = guild.voice_client
