@@ -4,7 +4,7 @@ from discord import app_commands
 import asyncio
 import functools
 
-# Se preferir usar yt-dlp:
+# Se preferir usar yt-dlp, troque a linha abaixo para:
 # import yt_dlp as youtube_dl
 import youtube_dl
 
@@ -25,6 +25,38 @@ FFMPEG_OPTIONS = {
 }
 
 # --------------------------------------------------
+#   HELPER: Envia msg que some em 30s
+# --------------------------------------------------
+async def send_temporary_message(
+    interaction: discord.Interaction,
+    content: str = None,
+    embed: discord.Embed = None,
+    delay: int = 30
+):
+    """
+    Envia uma mensagem normal (visível a todos) e a deleta após 'delay' segundos.
+    """
+    # Se ainda não respondemos, podemos usar 'interaction.response'.
+    if not interaction.response.is_done():
+        if content and embed:
+            await interaction.response.send_message(content=content, embed=embed)
+        elif embed:
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message(content=content)
+        msg = await interaction.original_response()
+    else:
+        # Se já respondemos antes, usamos followup
+        msg = await interaction.followup.send(content=content, embed=embed)
+
+    # Espera X segundos e apaga a mensagem
+    await asyncio.sleep(delay)
+    try:
+        await msg.delete()
+    except:
+        pass
+
+# --------------------------------------------------
 #   Classe Track - armazena dados da música
 # --------------------------------------------------
 class Track:
@@ -40,7 +72,8 @@ class PlaySongModal(discord.ui.Modal, title="Tocar Música"):
     query = discord.ui.TextInput(
         label="Nome / URL da música",
         style=discord.TextStyle.short,
-        placeholder="Ex: https://youtube.com/..."
+        placeholder="Ex: https://youtube.com/...",
+        required=True
     )
 
     def __init__(self, cog, interaction: discord.Interaction):
@@ -57,45 +90,37 @@ class PlaySongModal(discord.ui.Modal, title="Tocar Música"):
 # ======================================================================
 class MusicView(discord.ui.View):
     def __init__(self, cog):
-        super().__init__(timeout=None)
+        super().__init__(timeout=None)  # sem timeout
         self.cog = cog
 
     @discord.ui.button(label="Entrar", style=discord.ButtonStyle.green, emoji="🔊")
     async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Botão para entrar no canal de voz do usuário."""
         await self.cog.join_voice(interaction)
 
     @discord.ui.button(label="Play", style=discord.ButtonStyle.blurple, emoji="▶️")
     async def play_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Abre Modal para digitar a URL ou busca."""
         modal = PlaySongModal(self.cog, interaction)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Pause/Resume", style=discord.ButtonStyle.gray, emoji="⏯️")
     async def pause_resume_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Pausa ou retoma a música atual."""
         await self.cog.pause_resume(interaction)
 
     @discord.ui.button(label="Skip", style=discord.ButtonStyle.gray, emoji="⏭️")
     async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Pula a música atual."""
         await self.cog.skip_track(interaction)
 
     @discord.ui.button(label="Stop", style=discord.ButtonStyle.red, emoji="🛑")
     async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Para a reprodução e limpa a fila."""
         await self.cog.stop_music(interaction)
 
     @discord.ui.button(label="Fila", style=discord.ButtonStyle.secondary, emoji="🎶")
     async def queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Mostra a fila."""
         await self.cog.show_queue(interaction)
 
     @discord.ui.button(label="Sair", style=discord.ButtonStyle.danger, emoji="🚪")
     async def leave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Bot sai do canal de voz."""
         await self.cog.leave_voice(interaction)
-
 
 # ======================================================================
 #   COG PRINCIPAL DE MÚSICA
@@ -114,20 +139,21 @@ class MusicButtonsCog(commands.Cog):
         embed = discord.Embed(
             title="🎶 Painel de Música",
             description=(
-                "Use os **botões** abaixo para **entrar**, tocar, pausar, pular, parar "
-                "ou conferir a fila de músicas!\n"
-                "• **Entrar**: Bot entra no seu canal.\n"
-                "• **Play**: Abre um Modal para você digitar a música/URL.\n"
-                "• **Pause/Resume**: Pausa ou retoma.\n"
-                "• **Skip**: Pula a música atual.\n"
-                "• **Stop**: Para tudo e limpa a fila.\n"
-                "• **Fila**: Mostra as músicas na fila.\n"
-                "• **Sair**: Bot sai do canal de voz."
+                "**Use os botões abaixo** para:\n"
+                "• **Entrar** no seu canal\n"
+                "• **Play** (abrir modal para digitar música ou URL)\n"
+                "• **Pause/Resume**\n"
+                "• **Skip** (pular música)\n"
+                "• **Stop** (parar e limpar fila)\n"
+                "• **Fila** (mostrar a fila)\n"
+                "• **Sair** do canal\n\n"
+                "Todas as mensagens **somem** após 30 segundos."
             ),
             color=discord.Color.blurple()
         )
         view = MusicView(self)
-        await interaction.response.send_message(embed=embed, view=view)
+        # Envia embed com botões + apaga em 30s
+        await send_temporary_message(interaction, embed=embed)
 
     # ------------------------------------------------------------------
     #     Funções chamadas pelos BOTÕES / MODALS
@@ -136,143 +162,166 @@ class MusicButtonsCog(commands.Cog):
         """Bot entra no canal de voz do usuário."""
         user = interaction.user
         if not user.voice or not user.voice.channel:
-            return await interaction.response.send_message(
-                "Você precisa estar em um canal de voz!",
-                ephemeral=True
+            return await send_temporary_message(
+                interaction,
+                content="Você precisa estar em um canal de voz!"
             )
 
         channel = user.voice.channel
         voice_client = interaction.guild.voice_client
 
-        if voice_client and voice_client.is_connected():
-            await voice_client.move_to(channel)
-        else:
-            await channel.connect()
+        try:
+            if voice_client and voice_client.is_connected():
+                await voice_client.move_to(channel)
+            else:
+                await channel.connect()
+        except discord.Forbidden:
+            return await send_temporary_message(
+                interaction,
+                content="❌ Não tenho permissão para entrar/mover para este canal de voz!"
+            )
+        except Exception as e:
+            return await send_temporary_message(
+                interaction,
+                content=f"❌ Erro ao conectar ao canal de voz: {e}"
+            )
 
-        await interaction.response.send_message(
-            f"Entrei no canal de voz: **{channel}**",
-            ephemeral=True
+        await send_temporary_message(
+            interaction,
+            content=f"Entrei no canal de voz: **{channel}**"
         )
 
     async def play_music(self, interaction: discord.Interaction, search: str):
-        """Executa a lógica de tocar música (sem slash command)."""
         guild = interaction.guild
         voice_client = guild.voice_client
 
+        # Se não está no canal, tenta conectar
         if not voice_client or not voice_client.is_connected():
-            # Tenta conectar
             if not interaction.user.voice or not interaction.user.voice.channel:
-                return await interaction.followup.send(
-                    "Você não está em um canal de voz!",
-                    ephemeral=True
+                return await send_temporary_message(
+                    interaction,
+                    content="Você não está em um canal de voz!"
                 )
-            await interaction.user.voice.channel.connect()
+            try:
+                await interaction.user.voice.channel.connect()
+            except discord.Forbidden:
+                return await send_temporary_message(
+                    interaction,
+                    content="❌ Não tenho permissão para entrar neste canal de voz!"
+                )
+            except Exception as e:
+                return await send_temporary_message(
+                    interaction,
+                    content=f"❌ Erro ao conectar ao canal de voz: {e}"
+                )
             voice_client = guild.voice_client
 
-        await interaction.followup.send("Buscando...", ephemeral=True)
+        await send_temporary_message(interaction, content="Buscando...")
 
-        # Busca música
         track = await self.get_track(search)
         if not track:
-            return await interaction.followup.send("❌ Não foi possível obter esta música.", ephemeral=True)
+            return await send_temporary_message(
+                interaction,
+                content="❌ Não foi possível obter esta música."
+            )
 
         queue = self.queues.setdefault(guild.id, [])
         queue.append(track)
 
         if not voice_client.is_playing():
             await self.play_next(guild)
-            await interaction.followup.send(
-                f"🎶 Tocando agora: **{track.title}**",
-                ephemeral=True
+            await send_temporary_message(
+                interaction,
+                content=f"🎶 Tocando agora: **{track.title}**"
             )
         else:
-            await interaction.followup.send(
-                f"Adicionado à fila: **{track.title}**",
-                ephemeral=True
+            await send_temporary_message(
+                interaction,
+                content=f"Adicionado à fila: **{track.title}**"
             )
 
     async def pause_resume(self, interaction: discord.Interaction):
-        """Pausa ou retoma a música."""
         voice_client = interaction.guild.voice_client
         if not voice_client or not voice_client.is_connected():
-            return await interaction.response.send_message(
-                "O bot não está no canal de voz.",
-                ephemeral=True
+            return await send_temporary_message(
+                interaction,
+                content="O bot não está no canal de voz."
             )
 
         if voice_client.is_paused():
             voice_client.resume()
-            await interaction.response.send_message("▶️ Música retomada.", ephemeral=True)
+            await send_temporary_message(interaction, content="▶️ Música retomada.")
         elif voice_client.is_playing():
             voice_client.pause()
-            await interaction.response.send_message("⏸️ Música pausada.", ephemeral=True)
+            await send_temporary_message(interaction, content="⏸️ Música pausada.")
         else:
-            await interaction.response.send_message(
-                "Não há música tocando/pausada no momento.",
-                ephemeral=True
+            await send_temporary_message(
+                interaction,
+                content="Não há música tocando/pausada no momento."
             )
 
     async def skip_track(self, interaction: discord.Interaction):
-        """Pula a música atual."""
         voice_client = interaction.guild.voice_client
         if not voice_client or not voice_client.is_playing():
-            return await interaction.response.send_message(
-                "Não há música tocando para pular.",
-                ephemeral=True
+            return await send_temporary_message(
+                interaction,
+                content="Não há música tocando para pular."
             )
         voice_client.stop()
-        await interaction.response.send_message("⏭️ Música pulada!", ephemeral=True)
+        await send_temporary_message(interaction, content="⏭️ Música pulada!")
 
     async def stop_music(self, interaction: discord.Interaction):
-        """Para a música e limpa a fila."""
         voice_client = interaction.guild.voice_client
         if voice_client and voice_client.is_connected():
             voice_client.stop()
             self.queues[interaction.guild.id] = []
-            await interaction.response.send_message("🛑 Parei a música e limpei a fila!", ephemeral=True)
+            await send_temporary_message(
+                interaction,
+                content="🛑 Parei a música e limpei a fila!"
+            )
         else:
-            await interaction.response.send_message(
-                "O bot não está tocando nada no momento.",
-                ephemeral=True
+            await send_temporary_message(
+                interaction,
+                content="O bot não está tocando nada no momento."
             )
 
     async def show_queue(self, interaction: discord.Interaction):
-        """Mostra a fila."""
         queue = self.queues.get(interaction.guild.id, [])
         if not queue:
-            return await interaction.response.send_message("A fila está vazia.", ephemeral=True)
+            return await send_temporary_message(
+                interaction,
+                content="A fila está vazia."
+            )
         desc = "\n".join(f"**{i+1}.** {t.title}" for i, t in enumerate(queue))
         embed = discord.Embed(
             title="🎶 Fila de Reprodução",
             description=desc,
             color=discord.Color.blue()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_temporary_message(interaction, embed=embed)
 
     async def leave_voice(self, interaction: discord.Interaction):
-        """Sai do canal de voz."""
         voice_client = interaction.guild.voice_client
         if not voice_client or not voice_client.is_connected():
-            return await interaction.response.send_message(
-                "Não estou em nenhum canal de voz.",
-                ephemeral=True
+            return await send_temporary_message(
+                interaction,
+                content="Não estou em nenhum canal de voz."
             )
         await voice_client.disconnect()
         self.queues[interaction.guild.id] = []
-        await interaction.response.send_message("Saí do canal de voz!", ephemeral=True)
+        await send_temporary_message(interaction, content="Saí do canal de voz!")
 
     # ------------------------------------------------------------------
-    #     Funções Internas: tocar a fila, extrair info do Youtube
+    #     Lógica interna: tocar a fila, extrair info do Youtube
     # ------------------------------------------------------------------
     async def play_next(self, guild: discord.Guild):
-        """Toca a próxima música da fila."""
         voice_client = guild.voice_client
         if not voice_client:
             return
 
         queue = self.queues.setdefault(guild.id, [])
         if len(queue) == 0:
-            # Fila vazia => Opcional: desconectar
+            # Fila vazia => se quiser, desconectar
             # await voice_client.disconnect()
             return
 
@@ -280,7 +329,7 @@ class MusicButtonsCog(commands.Cog):
 
         def after_playing(err):
             if err:
-                print(f"Erro ao tocar: {err}")
+                print(f"[ERRO AO TOCAR]: {err}")
             coro = self.play_next(guild)
             fut = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
             try:
@@ -289,10 +338,8 @@ class MusicButtonsCog(commands.Cog):
                 pass
 
         voice_client.play(track.source, after=after_playing)
-        # (Opcional) Enviar mensagem em algum canal fixo, se quiser
 
     async def get_track(self, search: str) -> Track:
-        """Busca a música usando youtube_dl e retorna um Track."""
         loop = asyncio.get_event_loop()
         data = await loop.run_in_executor(
             None,
@@ -307,7 +354,6 @@ class MusicButtonsCog(commands.Cog):
         return Track(source, title, url)
 
     def ytdl_extract(self, search: str):
-        """Extrai info usando youtube_dl."""
         with youtube_dl.YoutubeDL(YDL_OPTIONS) as ydl:
             info = ydl.extract_info(search, download=False)
             if not info:
@@ -321,8 +367,6 @@ class MusicButtonsCog(commands.Cog):
                 "title": info.get("title"),
             }
 
-
-# >>>>>>> MUITO IMPORTANTE <<<<<<
-# Ajuste aqui para a classe que você criou
+# Carrega o Cog
 async def setup(bot: commands.Bot):
     await bot.add_cog(MusicButtonsCog(bot))
