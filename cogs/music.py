@@ -49,9 +49,8 @@ class PlaySongModal(discord.ui.Modal, title="Tocar Música"):
         self.interaction = interaction
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Chamamos a função "play_music" do Cog, passando a query digitada
+        # Chama a função "play_music" do Cog, passando a query digitada
         await self.cog.play_music(interaction, self.query.value)
-
 
 # ======================================================================
 #   VIEW (Botões) para controlar a música
@@ -323,5 +322,7 @@ class MusicButtonsCog(commands.Cog):
             }
 
 
+# >>>>>>> MUITO IMPORTANTE <<<<<<
+# Ajuste aqui para a classe que você criou
 async def setup(bot: commands.Bot):
-    await bot.add_cog(cogs.music(bot))
+    await bot.add_cog(MusicButtonsCog(bot))
