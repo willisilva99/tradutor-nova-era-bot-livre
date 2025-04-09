@@ -21,7 +21,7 @@ STATUS_LIST = [
     "traduzindo",
     "matando zumbis",
     "falando com Willi",
-    "nova era PvE"
+    "Anarquia Z"
 ]
 
 @tasks.loop(minutes=5)
