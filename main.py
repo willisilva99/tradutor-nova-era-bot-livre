@@ -86,7 +86,6 @@ async def load_cogs():
         "cogs.arcano",
         "cogs.nome",
         # Se quiser usar seu cog de verificação:
-        "cogs.verificacao_cog",  # Exemplo: caso seu arquivo se chame verificacao_cog.py dentro de cogs/
     ]
     for cog in cogs:
         try:
