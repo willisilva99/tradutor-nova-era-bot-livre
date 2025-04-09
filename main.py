@@ -85,8 +85,7 @@ async def load_cogs():
         "cogs.ajuda_completa",
         "cogs.arcano",
         "cogs.nome",
-         "cogs.temporario",
-        "cogs.music"
+         "cogs.temporario"
     
     ]
     for cog in cogs:
