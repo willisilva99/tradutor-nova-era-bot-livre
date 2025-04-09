@@ -38,13 +38,14 @@ async def on_ready():
     bot.ready_flag = True
     print(f"✅ Bot conectado como {bot.user}")
 
-    # Sincroniza comandos de slash (necessário para que /ticketpanel etc. apareçam)
+    # Sincroniza comandos de slash
     await bot.tree.sync()
     print("✅ Comandos de Slash sincronizados!")
 
     if not change_status.is_running():
         change_status.start()
 
+    # Restaura as conexões Telnet do DB
     restore_telnet_connections()
     print("Bot está pronto!")
 
@@ -55,6 +56,7 @@ def restore_telnet_connections():
         for cfg in configs:
             try:
                 guild_id = cfg.guild_id
+                # Se já tiver conexão ativa para esse guild, encerra e recria
                 if guild_id in active_connections:
                     active_connections[guild_id].stop()
                     del active_connections[guild_id]
@@ -74,15 +76,17 @@ def restore_telnet_connections():
     print("✅ Conexões Telnet restauradas a partir do DB.")
 
 async def load_cogs():
-    # Inclua aqui o nome do seu novo cog "cogs.ajuda"
+    # Adicione aqui todos os cogs que quer carregar
     cogs = [
         "cogs.admin",
         "cogs.utility",
         "cogs.sevendays",
         "cogs.serverstatus",
-        "cogs.ajuda_completa",  # Novo cog de ajuda
-        "cogs.arcano",  # Novo cog de ajuda
-        "cogs.nome" 
+        "cogs.ajuda_completa",
+        "cogs.arcano",
+        "cogs.nome",
+        # Se quiser usar seu cog de verificação:
+        "cogs.verificacao_cog",  # Exemplo: caso seu arquivo se chame verificacao_cog.py dentro de cogs/
     ]
     for cog in cogs:
         try:
