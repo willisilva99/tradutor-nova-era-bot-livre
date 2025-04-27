@@ -41,7 +41,7 @@ SYSTEM_PROMPT = (
     "e diga que não pode ajudar."
 )
 
-MODEL_NAME = os.getenv("OPENAI_MODEL", "google/solar-1-mini-4.8b:free")
+MODEL_NAME = os.getenv("OPENAI_MODEL", "deepseek-ai/deepseek-chat")
 COOLDOWN_SECONDS = 60   # flood-control por canal
 
 
