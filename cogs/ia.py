@@ -22,7 +22,6 @@ from tenacity import AsyncRetrying, stop_after_attempt, wait_exponential
 from loguru import logger
 from aioprometheus import Counter, Registry
 from aioprometheus.service import Service
-from aioprometheus.service import Service
 
 # Importa cache persistente em banco e função normalize
 from sqlalchemy.exc import SQLAlchemyError
@@ -200,7 +199,7 @@ async def call_llm(msgs):
                         temperature=0.5, max_tokens=512, stream=True
                     )
                     API_CALLS.inc({"model":model})
-                    TOKENS_USED.inc({"model":model,"tokens":resp.usage.total_tokens})
+                    # TOKENS_USED removed because resp is stream
                     return resp
         except Exception as e:
             logger.warning(f"Model {model} failed: {e}")
@@ -228,7 +227,11 @@ class IACog(commands.Cog):
         ctx = retrieve_ctx(prompt)
         msgs=[{"role":"system","content":sys_p}, {"role":"system","content":f"Context: {ctx}"}, {"role":"user","content":prompt}]
         full=""
-        resp = await call_llm(msgs)
+        try:
+            resp = await call_llm(msgs)
+        except Exception as e:
+            yield "❌ Desculpe, a IA está indisponível agora."
+            return
         for chunk in resp:
             full+=chunk.choices[0].delta.content or ""; yield full
         db_set_cached(prompt, full); CACHE_TTL[key]=full
@@ -238,11 +241,14 @@ class IACog(commands.Cog):
         if itx: await itx.edit_original_response(content="⌛ Pensando…")
         else: thinking=await ch.send("⌛ Pensando…", reference=ref)
         temp=itx if itx else thinking; final=""
-        async for part in self._chat_stream(prompt, lang): final=part; snippet=final[-MAX_LEN:];
-        if itx: await itx.edit_original_response(content=snippet)
-        else: await temp.edit(content=snippet)
-        title=final.split('.')[0][:50] or ICON
-        emb=discord.Embed(title=title, description=final, color=COLOR)
+        async for part in self._chat_stream(prompt, lang):
+            final=part; snippet=final[-MAX_LEN:]
+            try:
+                if itx: await itx.edit_original_response(content=snippet)
+                else: await temp.edit(content=snippet)
+            except discord.HTTPException: pass
+        title = final.split('.')[0][:50] or ICON
+        emb = discord.Embed(title=title, description=final, color=COLOR)
         emb.set_footer(text=f"Assistente • {SERVER}")
         if itx: await itx.edit_original_response(content=None, embed=emb)
         else: await temp.edit(content=None, embed=emb)
@@ -258,7 +264,8 @@ class IACog(commands.Cog):
     @app_commands.command(name="ia", description="Pergunte algo sobre 7DTD / Conan")
     @app_commands.describe(pergunta="Sua dúvida")
     async def ia(self,itx:discord.Interaction, pergunta:str):
-        await itx.response.defer(ephemeral=True); await self._stream_to_channel(itx.channel, pergunta, itx=itx, eph=True)
+        await itx.response.defer(ephemeral=True)
+        await self._stream_to_channel(itx.channel, pergunta, itx=itx, eph=True)
 
     @app_commands.command(name="doc", description="Link rápido de guia")
     @app_commands.describe(termo="Ex.: forja, blood moon…")
@@ -287,4 +294,5 @@ class IACog(commands.Cog):
         col.delete_collection(); await build_vector_db()
         await itx.followup.send("RAG index recriado! ✅",ephemeral=True)
 
-async def setup(bot): await bot.add_cog(IACog(bot))
+async def setup(bot):
+    await bot.add_cog(IACog(bot))
