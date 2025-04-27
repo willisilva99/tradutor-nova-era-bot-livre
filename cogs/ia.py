@@ -1,9 +1,12 @@
-```python
 # cogs/ia.py – IA avançada: RAG+Streaming+Cache(DB)+Cooldown+/doc+Pooling+Retry+Embeds+Metrics+Fallback
 
-import os, re, time, asyncio, textwrap
+import os
+import re
+import time
+import asyncio
+import textwrap
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import aiohttp
 import numpy as np
@@ -24,59 +27,78 @@ from loguru import logger
 from aioprometheus import Counter, Registry
 from aioprometheus.service import Service
 
-# Importa cache persistente em banco e função normalize
 from sqlalchemy.exc import SQLAlchemyError
 from db import SessionLocal, AICache, normalize
 
-# ─────────────────────────── Configurações
+# ─────────────────────────── Configurações ─────────────────────────────────────
 load_dotenv()
+
+# OpenAI
 API_BASE   = os.getenv("OPENAI_API_BASE", "https://api.deepinfra.com/v1/openai")
 API_KEY    = os.getenv("OPENAI_API_KEY")
 MODEL_MAIN = os.getenv("OPENAI_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
 MODEL_FALL = os.getenv("OPENAI_MODEL_FALLBACK", "mistralai/Mistral-7B-Instruct-v0.2")
-OWNER_ID   = 470628393272999948
-SERVER     = "Anarquia Z"
 
-# Fontes para RAG (atualizadas)
-LINKS = [
-    "https://anarquia-z.netlify.app/",                         # Site oficial do servidor Anarquia Z
-    "https://7daystodie.com/",                                 # Site oficial do jogo
-    "https://7daystodie.com/changelog/",                       # Patch notes e release notes oficiais
-    "https://7daystodie.com/blogs/news/",                      # Notícias e atualizações (v1.0+)
-    "https://7daystodie.com/support/",                         # Suporte oficial e FAQ
-    "https://steamcommunity.com/app/251570/discussions/",       # Discussões Steam (PC)
-    "https://7daystodie.fandom.com/wiki/Beginners_Guide",      # Guia oficial para iniciantes
-    "https://7daystodie.fandom.com/wiki/1.0_Series",           # Página sobre a série 1.0
-    "https://7daystodie.fandom.com/wiki/Blood_Moon_Horde",     # Mecânicas de Blood Moon
-    "https://7daystodie.fandom.com/wiki/List_of_Zombies",      # Lista completa de zumbis
-    "https://7daystodie.fandom.com/wiki/Traps_and_Defenses",   # Armadilhas e defesas
-    "https://7daystodie.fandom.com/wiki/Perks",                # Sistema de Perks e Habilidades
-    "https://7daystodie.fandom.com/wiki/Weapon_Attachments",   # Customizações de armas
-    "https://7daystodie.fandom.com/wiki/Alchemy_Page",         # Guia de Alquimia
-    "https://7daystodie.fandom.com/wiki/Technology_Tree",      # Tecnologia e crafting avançado
-    "https://navezgane.map/",                                 # Mapa interativo Navezgane
-    "https://developer.valvesoftware.com/wiki/7_Days_to_Die_Dedicated_Server_Setup",  # Setup de servidor dedicado
-    "https://7daystodie-servers.com/server/151960/",           # Lista de servidores (Anarquia Z exemplo)
-    "https://ultahost.com/blog/pt/top-5-piores-perks-em-7-days-to-die/", # Artigo de perks
-    "https://www.reddit.com/r/7daystodie/",                    # Comunidade Reddit
-    "https://next.nexusmods.com/profile/NoVaErAPvE?gameId=1059",# Perfil de mods (NoVaErAPvE)
-    "https://www.youtube.com/c/TheOfficial7DaysToDie"          # Canal oficial no YouTube
-]
+# Bot & Server
+OWNER_ID = int(os.getenv("OWNER_ID", "470628393272999948"))
+SERVER   = os.getenv("SERVER_NAME", "Anarquia Z")
 
-DOCS = {
-    "forja": "https://7daystodie.fandom.com/wiki/Forging_System",
-    "blood moon": "https://7daystodie.fandom.com/wiki/Blood_Moon_Horde",
-    "zumbis": "https://7daystodie.fandom.com/wiki/List_of_Zombies",
-}
+# CAMI Host panel API (preencha no Railway)
+PANEL_URL   = os.getenv("CAMI_API_BASE")    # ex: https://painel.camy.host/api/client
+PANEL_TOKEN = os.getenv("CAMI_API_TOKEN")   # seu token CAMI
+SERVER_ID   = os.getenv("CAMI_SERVER_ID")   # ID do seu servidor na CAMI
 
 if not API_KEY:
     raise RuntimeError("OPENAI_API_KEY não definido!")
 
-# Cliente OpenAI e embeddings
+# ─────────────── utilitário CAMI API ──────────────────────────────────────────
+async def cami_request(path: str, method: str = "GET", json: Optional[dict] = None) -> dict:
+    headers = {
+        "Authorization": f"Bearer {PANEL_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    url = f"{PANEL_URL}/servers/{SERVER_ID}{path}"
+    async with aiohttp.ClientSession() as sess:
+        resp = await sess.request(method, url, headers=headers, json=json, timeout=15)
+        resp.raise_for_status()
+        return await resp.json()
+
+# ─────────────────────────── RAG LINKS & DOCS ──────────────────────────────────
+LINKS = [
+    "https://anarquia-z.netlify.app/",
+    "https://7daystodie.com/",
+    "https://7daystodie.com/changelog/",
+    "https://7daystodie.com/blogs/news/",
+    "https://7daystodie.com/support/",
+    "https://steamcommunity.com/app/251570/discussions/",
+    "https://7daystodie.fandom.com/wiki/Beginners_Guide",
+    "https://7daystodie.fandom.com/wiki/1.0_Series",
+    "https://7daystodie.fandom.com/wiki/Blood_Moon_Horde",
+    "https://7daystodie.fandom.com/wiki/List_of_Zombies",
+    "https://7daystodie.fandom.com/wiki/Traps_and_Defenses",
+    "https://7daystodie.fandom.com/wiki/Perks",
+    "https://7daystodie.fandom.com/wiki/Weapon_Attachments",
+    "https://7daystodie.fandom.com/wiki/Alchemy_Page",
+    "https://7daystodie.fandom.com/wiki/Technology_Tree",
+    "https://navezgane.map/",
+    "https://developer.valvesoftware.com/wiki/7_Days_to_Die_Dedicated_Server_Setup",
+    "https://7daystodie-servers.com/server/151960/",
+    "https://ultahost.com/blog/pt/top-5-piores-perks-em-7-days-to-die/",
+    "https://www.reddit.com/r/7daystodie/",
+    "https://next.nexusmods.com/profile/NoVaErAPvE?gameId=1059",
+    "https://www.youtube.com/c/TheOfficial7DaysToDie"
+]
+
+DOCS = {
+    "forja":      "https://7daystodie.fandom.com/wiki/Forging_System",
+    "blood moon": "https://7daystodie.fandom.com/wiki/Blood_Moon_Horde",
+    "zumbis":     "https://7daystodie.fandom.com/wiki/List_of_Zombies",
+}
+
+# ─────────────── Cliente OpenAI, embeddings e ChromaDB ─────────────────────────
 client   = OpenAI(base_url=API_BASE, api_key=API_KEY, timeout=30)
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Backend vetorial (Chroma ou pgvector)
 from chromadb.config import Settings
 if os.getenv("PGVECTOR_URL"):
     chroma_client = chromadb.PersistentClient(settings=Settings(
@@ -88,71 +110,62 @@ else:
     chroma_client = chromadb.PersistentClient(path="chromadb")
 col = chroma_client.get_or_create_collection("anarquia_z_rag")
 
-# Pooling em RAM
-_mem_docs: List[str] = []
-_mem_vecs: List[np.ndarray] = []
+# ─────────────────────────── Pooling em RAM ─────────────────────────────────────
+_mem_docs: List[str]         = []
+_mem_vecs: List[np.ndarray]  = []
 
 PROMPT_PT = textwrap.dedent(f"""
 Você está falando com a **Assistente Z** 🤖, a IA oficial do servidor **{SERVER}** (IP: 191.37.92.145:26920).
-• Especialista em **7 Days to Die** 🔨 e suporte ao **Anarquia Z**.
-• Responda **apenas** sobre 7 Days to Die, dúvidas de gameplay, mods, status ou suporte do servidor Anarquia Z.
+• Especialista em **7 Days to Die** 🔨 e suporte ao **{SERVER}**.
+• Responda **apenas** sobre 7 Days to Die, mods, gameplay, status e suporte.
 • Se perguntarem quem é o dono, mencione <@{OWNER_ID}>.
-• Convide sempre as pessoas a entrarem no **{SERVER}** (191.37.92.145:26920).
-Responda em português brasileiro, de forma clara, acolhedora e com emojis.
 """)
 
 PROMPT_EN = textwrap.dedent(f"""
-You are **Assistant Z** 🤖, the official AI of the **{SERVER}** server (IP: 191.37.92.145:26920).
-• Your expertise is support and information about **7 Days to Die** 🔨 and the **Anarquia Z** server.
-• Respond **only** to questions about 7 Days to Die, gameplay, mods, server status, and support for Anarquia Z.
-• If asked who the owner is, say <@{OWNER_ID}>.
-• Always invite players to join **{SERVER}** (191.37.92.145:26920).
-Please answer in clear, friendly English with emojis.
+You are **Assistant Z** 🤖, the official AI of the **{SERVER}** server.
+• Your expertise is support and info about **7 Days to Die** 🔨 and **{SERVER}**.
+• Respond **only** about 7 Days to Die, mods, gameplay, server status and support.
+• If asked who the owner is, mention <@{OWNER_ID}>.
 """)
 
-# Métricas Prometheus
+# ─────────────────────────── Métricas Prometheus ───────────────────────────────
 registry     = Registry()
-CACHE_HITS   = Counter("ia_cache_hits", "Cache DB hits")
+CACHE_HITS   = Counter("ia_cache_hits",   "Cache DB hits")
 CACHE_MISSES = Counter("ia_cache_misses", "Cache DB misses")
-API_CALLS    = Counter("ia_api_calls", "API calls count")
-TOKENS_USED  = Counter("ia_tokens_used", "Total tokens used")
-registry.register(CACHE_HITS)
-registry.register(CACHE_MISSES)
-registry.register(API_CALLS)
-registry.register(TOKENS_USED)
+API_CALLS    = Counter("ia_api_calls",    "API calls count")
+TOKENS_USED  = Counter("ia_tokens_used",  "Total tokens used")
+for metric in (CACHE_HITS, CACHE_MISSES, API_CALLS, TOKENS_USED):
+    registry.register(metric)
 service = Service()
 
-# Controle e cache
+# ─────────────────────────── Controle e cache ───────────────────────────────────
 CACHE_TTL = TTLCache(maxsize=2048, ttl=43200)
 COOLDOWN  = 60
 MAX_LEN   = 4000
 COLOR     = 0x8E2DE2
 ICON      = "🧟"
 
-# Regex e função para criar View de botões a partir de URLs
+# ───────────────────── Regex e View de botões para links ───────────────────────
 URL_REGEX = re.compile(r'(https?://[^\s]+)')
 def make_link_view(text: str) -> ui.View:
     view = ui.View()
-    urls = URL_REGEX.findall(text)
     seen = set()
-    for url in urls:
-        if url in seen:
-            continue
+    for url in URL_REGEX.findall(text):
+        if url in seen: continue
         seen.add(url)
-        label = url.replace('https://', '').replace('http://', '')
+        label = url.replace("https://","").replace("http://","")
         if len(label) > 40:
-            label = label[:37] + '...'
+            label = label[:37] + "..."
         view.add_item(ui.Button(label=label, url=url))
     return view
 
-# Cache DB helpers
-def db_get_cached(raw_q: str) -> str | None:
+# ────────────────────────── Cache DB helpers ────────────────────────────────────
+def db_get_cached(raw_q: str) -> Optional[str]:
     key = normalize(raw_q)
     with SessionLocal() as db:
         row = db.query(AICache).filter_by(question=key).first()
         if row:
             CACHE_HITS.inc({})
-            logger.info(f"Cache hit: {key}")
             return row.answer
     CACHE_MISSES.inc({})
     return None
@@ -168,17 +181,16 @@ def db_set_cached(raw_q: str, ans: str):
             else:
                 db.add(AICache(question=key, answer=ans))
             db.commit()
-            logger.info(f"Cached answered: {key}")
         except SQLAlchemyError as e:
             db.rollback()
             logger.error(f"AI-Cache error: {e}")
 
-# RAG helpers e pooling
+# ────────────────────────── RAG helpers & pooling ───────────────────────────────
 def _clean(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     for t in soup(["script","style","noscript"]):
         t.decompose()
-    return re.sub(r"\s+", " ", soup.get_text(" ")).strip()
+    return re.sub(r"\s+"," ", soup.get_text(" ")).strip()
 
 def _chunk(text: str, size: int = 500) -> List[str]:
     w = text.split()
@@ -188,14 +200,12 @@ async def _download(session, url: str) -> str:
     try:
         async with session.get(url, timeout=30) as r:
             return await r.text()
-    except Exception as e:
-        logger.warning(f"RAG fetch fail {url}: {e}")
+    except Exception:
         return ""
 
 async def build_vector_db():
     if col.count():
         return
-    logger.info("Building RAG index…")
     async with aiohttp.ClientSession(headers={"User-Agent":"Mozilla/5.0"}) as sess:
         pages = await tqdm_asyncio.gather(*[_download(sess, u) for u in LINKS])
     docs, embs = [], []
@@ -206,21 +216,20 @@ async def build_vector_db():
             col.add(ids=[f"{url}#{i}"], documents=[ch], embeddings=[emb])
             docs.append(ch)
             embs.append(np.array(emb))
-        logger.info(f"Indexed {url} ({len(txt)//1000}k chars)")
     global _mem_docs, _mem_vecs
     _mem_docs, _mem_vecs = docs, embs
 
 def retrieve_ctx(question: str, k: int = 5) -> str:
     if not _mem_vecs:
         return ""
-    qv = embedder.encode(question)
+    qv   = embedder.encode(question)
     sims = [float(np.dot(qv, v)) for v in _mem_vecs]
     idxs = sorted(range(len(sims)), key=lambda i: -sims[i])[:k]
     return "\n---\n".join(_mem_docs[i] for i in idxs)
 
-# LLM call com retry e fallback
+# ───────────────────────── LLM call com retry e fallback ─────────────────────────
 async def call_llm(msgs):
-    for model in [MODEL_MAIN, MODEL_FALL]:
+    for model in (MODEL_MAIN, MODEL_FALL):
         try:
             async for attempt in AsyncRetrying(
                 reraise=True,
@@ -232,20 +241,20 @@ async def call_llm(msgs):
                         client.chat.completions.create,
                         model=model,
                         messages=msgs,
-                        temperature=0.3,   # mais preciso
+                        temperature=0.3,
                         max_tokens=512,
                         stream=True
                     )
                     API_CALLS.inc({"model": model})
                     return resp
-        except Exception as e:
-            logger.warning(f"Model {model} failed: {e}")
+        except Exception:
+            continue
     raise RuntimeError("All models failed")
 
 class IACog(commands.Cog):
     def __init__(self, bot):
-        self.bot = bot
-        self.last: Dict[Tuple[int, int], float] = {}
+        self.bot  = bot
+        self.last = {}  # (channel_id, user_id) → timestamp
 
     async def cog_load(self):
         await service.start(addr="0.0.0.0", port=8000)
@@ -258,9 +267,9 @@ class IACog(commands.Cog):
         await build_vector_db()
 
     async def _chat_stream(self, prompt: str, lang: str):
-        cached_db = db_get_cached(prompt)
-        if cached_db:
-            yield cached_db
+        cached = db_get_cached(prompt)
+        if cached:
+            yield cached
             return
 
         key = normalize(prompt)
@@ -269,20 +278,20 @@ class IACog(commands.Cog):
             return
 
         sys_p = PROMPT_EN if lang == 'en' else PROMPT_PT
-        ctx = retrieve_ctx(prompt)
-        msgs = [
+        ctx   = retrieve_ctx(prompt)
+        msgs  = [
             {"role": "system", "content": sys_p},
             {"role": "system", "content": f"Context: {ctx}"},
-            {"role": "user", "content": prompt}
+            {"role": "user",   "content": prompt}
         ]
         full = ""
         try:
-            resp = await call_llm(msgs)
+            stream = await call_llm(msgs)
         except Exception:
-            yield "❌ Desculpe, a IA está indisponível agora."
+            yield "❌ IA indisponível."
             return
 
-        for chunk in resp:
+        async for chunk in stream:
             full += chunk.choices[0].delta.content or ""
             yield full
 
@@ -296,7 +305,7 @@ class IACog(commands.Cog):
         else:
             thinking = await ch.send("⌛ Pensando…", reference=ref)
 
-        temp = itx if itx else thinking
+        temp  = itx or thinking
         final = ""
         async for part in self._chat_stream(prompt, lang):
             final = part
@@ -310,9 +319,9 @@ class IACog(commands.Cog):
                 pass
 
         title = final.split('.')[0][:50] or ICON
-        emb = discord.Embed(title=title, description=final, color=COLOR)
+        emb   = discord.Embed(title=title, description=final, color=COLOR)
         emb.set_footer(text=f"Assistente • {SERVER}")
-        view = make_link_view(final)
+        view  = make_link_view(final)
 
         if itx:
             await itx.edit_original_response(content=None, embed=emb, view=view)
@@ -338,15 +347,29 @@ class IACog(commands.Cog):
     @app_commands.command(name="doc", description="Link rápido de guia")
     @app_commands.describe(termo="Ex.: forja, blood moon…")
     async def doc(self, itx: discord.Interaction, termo: str):
-        termo_lower = termo.lower()
         for k, url in DOCS.items():
-            if k in termo_lower:
+            if k in termo.lower():
                 view = ui.View()
                 view.add_item(ui.Button(label=k.title(), url=url))
                 return await itx.response.send_message("🔗 Aqui está o guia:", view=view, ephemeral=True)
         await itx.response.send_message("❌ Nenhum documento encontrado.", ephemeral=True)
 
-    @app_commands.command(name="ia_clearcache", description="Limpa todo cache da IA (owner)")
+    @app_commands.command(name="status", description="📡 Status do servidor Anarquia Z")
+    async def status(self, itx: discord.Interaction):
+        await itx.response.defer(ephemeral=True)
+        try:
+            data = await cami_request("/status")
+        except Exception as e:
+            return await itx.followup.send(f"❌ Erro API CAMI: {e}", ephemeral=True)
+
+        emb = discord.Embed(title="📡 Status Anarquia Z", color=COLOR)
+        emb.add_field(name="Online",    value=str(data.get("online", False)))
+        emb.add_field(name="Jogadores", value=f"{data.get('players', 0)}/{data.get('maxPlayers', 0)}")
+        emb.add_field(name="Versão",    value=data.get("version", "—"))
+        emb.set_footer(text=f"Atualizado em {datetime.utcnow():%d/%m/%Y %H:%M UTC}")
+        await itx.followup.send(embed=emb, ephemeral=True)
+
+    @app_commands.command(name="ia_clearcache", description="Limpa cache IA (owner)")
     async def clearcache(self, itx: discord.Interaction):
         if itx.user.id != OWNER_ID:
             return await itx.response.send_message("Só o dono. 🚫", ephemeral=True)
@@ -373,6 +396,7 @@ class IACog(commands.Cog):
         await build_vector_db()
         await itx.followup.send("RAG index recriado! ✅", ephemeral=True)
 
+    # Adicione aqui outros comandos CAMI, ex: /restart, /broadcast, usando cami_request()
+
 async def setup(bot):
     await bot.add_cog(IACog(bot))
-```
