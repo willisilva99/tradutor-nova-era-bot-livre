@@ -1,5 +1,5 @@
 # cogs/ia.py
-# IA focada em 7 Days to Die – usando a nova classe OpenAI() do SDK 1.x
+# IA especialista em 7 Days to Die — compatível com DeepInfra (OpenAI-compatible)
 
 import os
 import time
@@ -9,82 +9,68 @@ from typing import Dict
 import discord
 from discord.ext import commands
 from discord import app_commands
-
 from dotenv import load_dotenv
-from openai import OpenAI, OpenAIError   # novo client
+from openai import OpenAI, OpenAIError      # SDK 1.x+
 
 # ───────────────────────────────
-# Variáveis de ambiente
+# Variáveis de ambiente (.env ou Railway)
 # ───────────────────────────────
 load_dotenv()
 
 API_BASE = os.getenv("OPENAI_API_BASE", "https://api.deepinfra.com/v1/openai")
-API_KEY  = os.getenv("OPENAI_API_KEY")
+API_KEY  = os.getenv("OPENAI_API_KEY")          # ex.: di_abcd1234…
+MODEL_ID = os.getenv("OPENAI_MODEL", "meta-llama/llama-3-8b-instruct")
 
 if not API_KEY:
-    raise RuntimeError("OPENAI_API_KEY não definido no ambiente!")
+    raise RuntimeError("OPENAI_API_KEY não definido!")
 
-client = OpenAI(
-    base_url=API_BASE,
-    api_key=API_KEY,
-)
+client = OpenAI(base_url=API_BASE, api_key=API_KEY)
 
-EXTRA_HEADERS = {}
-if ref := os.getenv("OPENAI_REFERER"):
-    EXTRA_HEADERS["HTTP-Referer"] = ref
-if title := os.getenv("OPENAI_SITE_TITLE"):
-    EXTRA_HEADERS["X-Title"] = title
-
+EXTRA_HEADERS = {}            # DeepInfra não exige cabeçalhos extras
 SYSTEM_PROMPT = (
     "Você é uma inteligência artificial especialista SOMENTE em 7 Days to Die. "
     "Responda unicamente sobre o jogo; se a pergunta fugir do tema, peça desculpas "
     "e diga que não pode ajudar."
 )
+COOLDOWN_SECONDS = 60         # flood-control por canal
 
-MODEL_NAME = os.getenv("OPENAI_MODEL", "https://api.deepinfra.com/v1/openai")
-COOLDOWN_SECONDS = 60   # flood-control por canal
-
-
+# ───────────────────────────────
 class IACog(commands.Cog):
-    """Cog que injeta IA (OpenRouter / OpenAI-compatible) focada em 7DTD."""
-
+    """Cog que injeta IA gratuita (DeepInfra) focada em 7DTD."""
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.last_answer: Dict[int, float] = {}   # canal_id → timestamp
+        self.last_answer: Dict[int, float] = {}
 
-    # ─────────────────── utilidades ───────────────────
+    # ───────── utilidades ─────────
     @staticmethod
     def _looks_like_question(text: str) -> bool:
         text = text.lower()
         return "?" in text or any(
-            kw in text for kw in ("como ", "ajuda", "help", "dúvida", "how ")
+            kw in text for kw in ("como ", "how ", "help", "ajuda", "dúvida")
         )
 
-    async def _chat_completion(self, user_question: str) -> str:
-        """Envia a pergunta ao modelo."""
+    async def _chat_completion(self, question: str) -> str:
         try:
             resp = await asyncio.to_thread(
                 client.chat.completions.create,
-                model=MODEL_NAME,
+                model=MODEL_ID,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user",   "content": user_question},
+                    {"role": "user",   "content": question},
                 ],
-                extra_headers=EXTRA_HEADERS,
-                temperature=0.3,
                 max_tokens=512,
+                temperature=0.3,
+                extra_headers=EXTRA_HEADERS,
             )
             return resp.choices[0].message.content.strip()
         except OpenAIError as exc:
             print(f"[IA] Erro no LLM: {exc}")
             return "Desculpe, houve um problema ao consultar a IA."
 
-    # ─────────────────── listener automático ───────────────────
+    # ─────── listener automático ───────
     @commands.Cog.listener("on_message")
     async def auto_helper(self, message: discord.Message):
-        if message.author.bot:
-            return
-        if not self._looks_like_question(message.content):
+        if message.author.bot or not self._looks_like_question(message.content):
             return
 
         now = time.time()
@@ -95,11 +81,8 @@ class IACog(commands.Cog):
         await message.reply(answer, mention_author=False)
         self.last_answer[message.channel.id] = now
 
-    # ─────────────────── slash-commands ───────────────────
-    @app_commands.command(
-        name="ia",
-        description="Pergunte algo sobre 7 Days to Die (IA)"
-    )
+    # ─────── slash-commands ───────
+    @app_commands.command(name="ia", description="Pergunte algo sobre 7 Days to Die")
     @app_commands.describe(pergunta="Sua dúvida")
     async def ia_slash(self, interaction: discord.Interaction, pergunta: str):
         await interaction.response.defer(thinking=True, ephemeral=True)
@@ -113,6 +96,6 @@ class IACog(commands.Cog):
         latency_ms = int((time.perf_counter() - before) * 1000)
         await interaction.response.send_message(f"🏓 IA Pong! {latency_ms} ms")
 
-# ─────────────────── carregamento ───────────────────
+# ───────── carregamento ─────────
 async def setup(bot: commands.Bot):
     await bot.add_cog(IACog(bot))
