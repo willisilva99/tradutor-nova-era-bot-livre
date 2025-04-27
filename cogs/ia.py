@@ -1,10 +1,12 @@
-# cogs/ia.py – IA + RAG (scrape links) + embed bonito
-import os, re, time, asyncio, textwrap, requests
-from bs4 import BeautifulSoup
+# cogs/ia.py – IA + RAG + embed (versão 2025-04)
+
+import os, re, time, asyncio, textwrap
 from typing import Dict, List
 
+import aiohttp
+from bs4 import BeautifulSoup
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 from discord import app_commands
 
 from dotenv import load_dotenv
@@ -12,7 +14,7 @@ from sentence_transformers import SentenceTransformer
 import chromadb
 from openai import OpenAI, OpenAIError
 
-# ───────────────────────────────  Config
+# ─────────────────────── Config
 load_dotenv()
 API_BASE = os.getenv("OPENAI_API_BASE", "https://api.deepinfra.com/v1/openai")
 API_KEY  = os.getenv("OPENAI_API_KEY")
@@ -21,7 +23,7 @@ OWNER_ID = 470628393272999948
 SERVER   = "Anarquia Z"
 
 LINKS = [
-    "https://anarquia-z.netlify.app/",
+    "https://anarquia-z.netlify.app",
     "https://x.com/7daystodie",
     "https://7daystodie.fandom.com/wiki/Beginners_Guide",
     "https://7daystodie.fandom.com/wiki/Blood_Moon_Horde",
@@ -32,126 +34,115 @@ LINKS = [
 if not API_KEY:
     raise RuntimeError("OPENAI_API_KEY não definido!")
 
-client   = OpenAI(base_url=API_BASE, api_key=API_KEY)
+client   = OpenAI(base_url=API_BASE, api_key=API_KEY, timeout=30)
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 chroma   = chromadb.PersistentClient(path="chromadb")
 col      = chroma.get_or_create_collection("anarquia_z_rag")
 
-# ───────────────────────────────  Prompt base
+# ─────────────────────── Prompt
 BASE_PROMPT = textwrap.dedent(f"""
     Você é a assistente oficial do servidor **{SERVER}**.
     Jogos cobertos: 7 Days to Die e Conan Exiles.
-    Sempre que fizer sentido convide o jogador a entrar no **{SERVER}**.
     Se perguntarem quem é o dono, responda <@{OWNER_ID}>.
-    Responda em português brasileiro, de forma curta e objetiva.
+    Quando fizer sentido, convide o jogador a juntar-se ao **{SERVER}**.
+    Use português brasileiro, seja direto e amigável.
 """)
 
-# ───────────────────────────────  Funções RAG
-def _clean_html(html: str) -> str:
+# ─────────────────────── Utilidades RAG
+def _clean(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "noscript"]):
-        tag.decompose()
-    text = soup.get_text(separator=" ")
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+    for t in soup(["script", "style", "noscript"]): t.decompose()
+    txt = re.sub(r"\s+", " ", soup.get_text(" "))
+    return txt.strip()
 
-def _chunk(text: str, size: int = 500) -> List[str]:
-    words = text.split()
-    return [" ".join(words[i:i+size]) for i in range(0, len(words), size)]
+def _chunk(text: str, size=500) -> List[str]:
+    w = text.split(); return [" ".join(w[i:i+size]) for i in range(0, len(w), size)]
 
-def build_vector_db():
+async def download(session, url):
+    try:
+        async with session.get(url, timeout=20) as r:
+            return await r.text()
+    except Exception as e:
+        print(f"[RAG] Falhou {url[:60]}… {e}")
+        return ""
+
+async def build_vector_db():
     if col.count() > 0:
-        return  # já existe
-    print("[RAG] Construindo base vetorial…")
-    for url in LINKS:
-        try:
-            html = requests.get(url, timeout=20).text
-            clean = _clean_html(html)
+        return
+    print("[RAG] Gerando embeddings…")
+    hdrs = {"User-Agent": "Mozilla/5.0 (RAG-Bot)"}
+    async with aiohttp.ClientSession(headers=hdrs) as sess:
+        tasks = [download(sess, u) for u in LINKS]
+        for url, html in zip(LINKS, await asyncio.gather(*tasks)):
+            clean = _clean(html)
             for i, chunk in enumerate(_chunk(clean)):
                 vec = embedder.encode(chunk).tolist()
                 col.add(ids=[f"{url}#{i}"], documents=[chunk], embeddings=[vec])
-            print(f"[RAG] {url} OK")
-        except Exception as e:
-            print(f"[RAG] Falhou {url}: {e}")
+            print(f"[RAG] {url} OK ({len(clean)//1000}k chars)")
 
-def retrieve_context(query: str, k: int = 3) -> str:
-    if col.count() == 0:
-        return ""
+def retrieve(query: str, k=3) -> str:
+    if col.count()==0: return ""
     qvec = embedder.encode(query).tolist()
-    res  = col.query(query_embeddings=[qvec], n_results=k, include=["documents"])
+    res  = col.query([qvec], n_results=k, include=["documents"])
     return "\n---\n".join(res["documents"][0])
 
-# ───────────────────────────────  Cog
-COLOR = 0x8E2DE2
-ICON  = "🧟"
-COOLDOWN = 60
+# ─────────────────────── Cog
+COLOR = 0x8E2DE2; ICON="🧟"; COOLDOWN=60; MAX_EMB=4000
 
 class IACog(commands.Cog):
-    def __init__(self, bot):
-        self.bot     = bot
-        self.last: Dict[int,float] = {}
-        # gera vetores na 1ª carga (em thread p/ não travar)
-        bot.loop.create_task(asyncio.to_thread(build_vector_db))
+    def __init__(self, bot): self.bot, self.last = bot, {}
 
-    # ===== Chat =====
-    async def _chat(self, q: str) -> str:
-        context = retrieve_context(q)
-        messages = [
-            {"role":"system","content":BASE_PROMPT},
-            {"role":"system","content":f"Contexto relevante:\n{context}"},
-            {"role":"user",  "content":q},
-        ]
+    async def cog_load(self):               # <- SAFE init
+        asyncio.create_task(build_vector_db())
+
+    async def _chat(self, q:str) -> str:
+        ctx = retrieve(q)
+        msgs=[{"role":"system","content":BASE_PROMPT},
+              {"role":"system","content":f"Contexto:\n{ctx}"},
+              {"role":"user","content":q}]
         try:
             r = await asyncio.to_thread(
                 client.chat.completions.create,
-                model=MODEL_ID,
-                messages=messages,
-                max_tokens=512, temperature=0.3,
-            )
+                model=MODEL_ID, messages=msgs,
+                max_tokens=512, temperature=0.3)
             return r.choices[0].message.content.strip()
         except OpenAIError as e:
-            print("[IA] erro:", e)
-            return "Desculpe, a IA está indisponível agora."
+            print("[IA] erro:", e); return "Desculpe, a IA falhou agora."
 
-    async def _send_embed(self, channel, ans, ref=None, itx=None, eph=False):
-        emb = discord.Embed(title=f"{ICON} Resposta da IA", description=ans, color=COLOR)
-        emb.set_footer(text=f"Assistente • {SERVER}")
-        if itx:
-            await itx.followup.send(embed=emb, ephemeral=eph)
-        else:
-            await channel.send(embed=emb, reference=ref)
+    async def _send(self, ch, txt, ref=None, itx=None, eph=False):
+        chunks = [txt[i:i+MAX_EMB] for i in range(0,len(txt),MAX_EMB)]
+        for idx,c in enumerate(chunks):
+            emb=discord.Embed(title=f"{ICON} Resposta da IA" if idx==0 else None,
+                              description=c, color=COLOR)
+            if idx==0: emb.set_footer(text=f"Assistente • {SERVER}")
+            if itx: await itx.followup.send(embed=emb, ephemeral=eph)
+            else:   await ch.send(embed=emb, reference=ref)
 
-    # ===== Listener =====
+    # Listener
     @commands.Cog.listener("on_message")
-    async def auto(self, m: discord.Message):
-        if m.author.bot: return
-        if "?" not in m.content and "ajuda" not in m.content.lower(): return
-        if time.time()-self.last.get(m.channel.id,0) < COOLDOWN: return
-        ans = await self._chat(m.content)
-        await self._send_embed(m.channel, ans, ref=m)
-        self.last[m.channel.id] = time.time()
+    async def auto(self, m:discord.Message):
+        if m.author.bot or "?" not in m.content: return
+        if time.time()-self.last.get(m.channel.id,0)<COOLDOWN: return
+        ans=await self._chat(m.content); await self._send(m.channel, ans, ref=m)
+        self.last[m.channel.id]=time.time()
 
-    # ===== Slash =====
-    @app_commands.command(name="ia", description="Pergunte algo sobre 7DTD ou Conan")
-    async def ia(self, itx: discord.Interaction, pergunta: str):
-        await itx.response.defer(thinking=True, ephemeral=True)
-        ans = await self._chat(pergunta)
-        await self._send_embed(itx.channel, ans, itx=itx, eph=True)
+    # Slash
+    @app_commands.command(name="ia", description="Pergunte sobre 7DTD/Conan")
+    async def ia(self,itx:discord.Interaction, pergunta:str):
+        await itx.response.defer(ephemeral=True, thinking=True)
+        await self._send(itx.channel, await self._chat(pergunta), itx=itx, eph=True)
 
     @app_commands.command(name="ia_ping", description="Latência da IA")
-    async def ping(self, itx: discord.Interaction):
-        t0=time.perf_counter(); _=await self._chat("pong?")
-        await itx.response.send_message(f"🏓 {int((time.perf_counter()-t0)*1000)} ms")
+    async def ia_ping(self,itx:discord.Interaction):
+        t0=time.perf_counter(); _=await self._chat("ping")
+        await itx.response.send_message(f"🏓 {int((time.perf_counter()-t0)*1e3)} ms")
 
-    # ===== Recarregar vetores =====
-    @app_commands.command(name="ia_recarregar", description="Regera a base de conhecimento (admin)")
-    async def recarregar(self, itx: discord.Interaction):
-        if itx.user.id != OWNER_ID:
-            await itx.response.send_message("Só o dono pode recarregar.", ephemeral=True)
-            return
-        await itx.response.defer(thinking=True, ephemeral=True)
-        col.delete_collection()
-        build_vector_db()
+    @app_commands.command(name="ia_recarregar", description="Recarrega base (owner)")
+    async def recarregar(self,itx:discord.Interaction):
+        if itx.user.id!=OWNER_ID:
+            return await itx.response.send_message("Só o dono.", ephemeral=True)
+        await itx.response.defer(ephemeral=True, thinking=True)
+        col.delete_collection(); await build_vector_db()
         await itx.followup.send("Base recarregada!", ephemeral=True)
 
 async def setup(bot): await bot.add_cog(IACog(bot))
