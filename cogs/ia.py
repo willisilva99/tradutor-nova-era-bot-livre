@@ -41,7 +41,7 @@ SYSTEM_PROMPT = (
     "e diga que não pode ajudar."
 )
 
-MODEL_NAME = os.getenv("OPENAI_MODEL", "microsoft/phi-3-mini-128k-instruct:free")
+MODEL_NAME = os.getenv("OPENAI_MODEL", "google/solar-1-mini-4.8b:free")
 COOLDOWN_SECONDS = 60   # flood-control por canal
 
 
