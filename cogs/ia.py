@@ -1,3 +1,4 @@
+```python
 # cogs/ia.py – IA avançada: RAG+Streaming+Cache(DB)+Cooldown+/doc+Pooling+Retry+Embeds+Metrics+Fallback
 
 import os, re, time, asyncio, textwrap
@@ -9,7 +10,7 @@ import numpy as np
 from bs4 import BeautifulSoup
 import discord
 from discord.ext import commands, tasks
-from discord import app_commands
+from discord import app_commands, ui
 
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
@@ -40,26 +41,26 @@ SERVER     = "Anarquia Z"
 LINKS = [
     "https://anarquia-z.netlify.app/",                         # Site oficial do servidor Anarquia Z
     "https://7daystodie.com/",                                 # Site oficial do jogo
-    "https://7daystodie.com/changelog/",                      # Patch notes e release notes oficiais
-    "https://7daystodie.com/blogs/news/",                     # Notícias e atualizações (v1.0+)
-    "https://7daystodie.com/support/",                        # Suporte oficial e FAQ
-    "https://steamcommunity.com/app/251570/discussions/",     # Discussões Steam (PC)
-    "https://7daystodie.fandom.com/wiki/Beginners_Guide",     # Guia oficial para iniciantes
-    "https://7daystodie.fandom.com/wiki/1.0_Series",          # Página sobre a série 1.0
-    "https://7daystodie.fandom.com/wiki/Blood_Moon_Horde",    # Mecânicas de Blood Moon
-    "https://7daystodie.fandom.com/wiki/List_of_Zombies",     # Lista completa de zumbis
-    "https://7daystodie.fandom.com/wiki/Traps_and_Defenses",  # Armadilhas e defesas
-    "https://7daystodie.fandom.com/wiki/Perks",               # Sistema de Perks e Habilidades
-    "https://7daystodie.fandom.com/wiki/Weapon_Attachments", # Customizações de armas
-    "https://7daystodie.fandom.com/wiki/Alchemy_Page",       # Guia de Alquimia
-    "https://7daystodie.fandom.com/wiki/Technology_Tree",    # Tecnologia e crafting avançado
+    "https://7daystodie.com/changelog/",                       # Patch notes e release notes oficiais
+    "https://7daystodie.com/blogs/news/",                      # Notícias e atualizações (v1.0+)
+    "https://7daystodie.com/support/",                         # Suporte oficial e FAQ
+    "https://steamcommunity.com/app/251570/discussions/",       # Discussões Steam (PC)
+    "https://7daystodie.fandom.com/wiki/Beginners_Guide",      # Guia oficial para iniciantes
+    "https://7daystodie.fandom.com/wiki/1.0_Series",           # Página sobre a série 1.0
+    "https://7daystodie.fandom.com/wiki/Blood_Moon_Horde",     # Mecânicas de Blood Moon
+    "https://7daystodie.fandom.com/wiki/List_of_Zombies",      # Lista completa de zumbis
+    "https://7daystodie.fandom.com/wiki/Traps_and_Defenses",   # Armadilhas e defesas
+    "https://7daystodie.fandom.com/wiki/Perks",                # Sistema de Perks e Habilidades
+    "https://7daystodie.fandom.com/wiki/Weapon_Attachments",   # Customizações de armas
+    "https://7daystodie.fandom.com/wiki/Alchemy_Page",         # Guia de Alquimia
+    "https://7daystodie.fandom.com/wiki/Technology_Tree",      # Tecnologia e crafting avançado
     "https://navezgane.map/",                                 # Mapa interativo Navezgane
     "https://developer.valvesoftware.com/wiki/7_Days_to_Die_Dedicated_Server_Setup",  # Setup de servidor dedicado
-    "https://7daystodie-servers.com/server/151960/",         # Lista de servidores (Anarquia Z exemplo)
+    "https://7daystodie-servers.com/server/151960/",           # Lista de servidores (Anarquia Z exemplo)
     "https://ultahost.com/blog/pt/top-5-piores-perks-em-7-days-to-die/", # Artigo de perks
-    "https://www.reddit.com/r/7daystodie/",                   # Comunidade Reddit
-    "https://next.nexusmods.com/profile/NoVaErAPvE?gameId=1059", # Perfil de mods (NoVaErAPvE)
-    "https://www.youtube.com/c/TheOfficial7DaysToDie"        # Canal oficial no YouTube
+    "https://www.reddit.com/r/7daystodie/",                    # Comunidade Reddit
+    "https://next.nexusmods.com/profile/NoVaErAPvE?gameId=1059",# Perfil de mods (NoVaErAPvE)
+    "https://www.youtube.com/c/TheOfficial7DaysToDie"          # Canal oficial no YouTube
 ]
 
 DOCS = {
@@ -79,7 +80,9 @@ embedder = SentenceTransformer("all-MiniLM-L6-v2")
 from chromadb.config import Settings
 if os.getenv("PGVECTOR_URL"):
     chroma_client = chromadb.PersistentClient(settings=Settings(
-        chroma_db_impl="postgres", connection_uri=os.getenv("PGVECTOR_URL"), anonymized_telemetry=False
+        chroma_db_impl="postgres",
+        connection_uri=os.getenv("PGVECTOR_URL"),
+        anonymized_telemetry=False
     ))
 else:
     chroma_client = chromadb.PersistentClient(path="chromadb")
@@ -107,7 +110,6 @@ You are **Assistant Z** 🤖, the official AI of the **{SERVER}** server (IP: 19
 Please answer in clear, friendly English with emojis.
 """)
 
-
 # Métricas Prometheus
 registry     = Registry()
 CACHE_HITS   = Counter("ia_cache_hits", "Cache DB hits")
@@ -127,8 +129,23 @@ MAX_LEN   = 4000
 COLOR     = 0x8E2DE2
 ICON      = "🧟"
 
-# Cache DB helpers
+# Regex e função para criar View de botões a partir de URLs
+URL_REGEX = re.compile(r'(https?://[^\s]+)')
+def make_link_view(text: str) -> ui.View:
+    view = ui.View()
+    urls = URL_REGEX.findall(text)
+    seen = set()
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        label = url.replace('https://', '').replace('http://', '')
+        if len(label) > 40:
+            label = label[:37] + '...'
+        view.add_item(ui.Button(label=label, url=url))
+    return view
 
+# Cache DB helpers
 def db_get_cached(raw_q: str) -> str | None:
     key = normalize(raw_q)
     with SessionLocal() as db:
@@ -139,7 +156,6 @@ def db_get_cached(raw_q: str) -> str | None:
             return row.answer
     CACHE_MISSES.inc({})
     return None
-
 
 def db_set_cached(raw_q: str, ans: str):
     key = normalize(raw_q)
@@ -154,18 +170,19 @@ def db_set_cached(raw_q: str, ans: str):
             db.commit()
             logger.info(f"Cached answered: {key}")
         except SQLAlchemyError as e:
-            db.rollback(); logger.error(f"AI-Cache error: {e}")
+            db.rollback()
+            logger.error(f"AI-Cache error: {e}")
 
 # RAG helpers e pooling
-
 def _clean(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
-    for t in soup(["script","style","noscript"]): t.decompose()
-    return re.sub(r"\s+"," ", soup.get_text(" ")).strip()
+    for t in soup(["script","style","noscript"]):
+        t.decompose()
+    return re.sub(r"\s+", " ", soup.get_text(" ")).strip()
 
-def _chunk(text: str, size: int=500) -> List[str]:
+def _chunk(text: str, size: int = 500) -> List[str]:
     w = text.split()
-    return [" ".join(w[i:i+size]) for i in range(0,len(w),size)]
+    return [" ".join(w[i:i+size]) for i in range(0, len(w), size)]
 
 async def _download(session, url: str) -> str:
     try:
@@ -176,41 +193,50 @@ async def _download(session, url: str) -> str:
         return ""
 
 async def build_vector_db():
-    if col.count(): return
+    if col.count():
+        return
     logger.info("Building RAG index…")
     async with aiohttp.ClientSession(headers={"User-Agent":"Mozilla/5.0"}) as sess:
-        pages = await tqdm_asyncio.gather(*[_download(sess,u) for u in LINKS])
+        pages = await tqdm_asyncio.gather(*[_download(sess, u) for u in LINKS])
     docs, embs = [], []
     for url, html in zip(LINKS, pages):
         txt = _clean(html)
-        for i,ch in enumerate(_chunk(txt)):
+        for i, ch in enumerate(_chunk(txt)):
             emb = embedder.encode(ch).tolist()
             col.add(ids=[f"{url}#{i}"], documents=[ch], embeddings=[emb])
-            docs.append(ch); embs.append(np.array(emb))
+            docs.append(ch)
+            embs.append(np.array(emb))
         logger.info(f"Indexed {url} ({len(txt)//1000}k chars)")
     global _mem_docs, _mem_vecs
     _mem_docs, _mem_vecs = docs, embs
 
-def retrieve_ctx(question: str, k: int=5) -> str:
-    if not _mem_vecs: return ""
+def retrieve_ctx(question: str, k: int = 5) -> str:
+    if not _mem_vecs:
+        return ""
     qv = embedder.encode(question)
-    sims = [float(np.dot(qv,v)) for v in _mem_vecs]
-    idxs = sorted(range(len(sims)), key=lambda i:-sims[i])[:k]
+    sims = [float(np.dot(qv, v)) for v in _mem_vecs]
+    idxs = sorted(range(len(sims)), key=lambda i: -sims[i])[:k]
     return "\n---\n".join(_mem_docs[i] for i in idxs)
 
 # LLM call com retry e fallback
 async def call_llm(msgs):
     for model in [MODEL_MAIN, MODEL_FALL]:
         try:
-            async for attempt in AsyncRetrying(reraise=True, stop=stop_after_attempt(3), wait=wait_exponential(1,10)):
+            async for attempt in AsyncRetrying(
+                reraise=True,
+                stop=stop_after_attempt(3),
+                wait=wait_exponential(1, 10)
+            ):
                 with attempt:
                     resp = await asyncio.to_thread(
                         client.chat.completions.create,
-                        model=model, messages=msgs,
-                        temperature=0.5, max_tokens=512, stream=True
+                        model=model,
+                        messages=msgs,
+                        temperature=0.3,   # mais preciso
+                        max_tokens=512,
+                        stream=True
                     )
-                    API_CALLS.inc({"model":model})
-                    # TOKENS_USED removed because resp is stream
+                    API_CALLS.inc({"model": model})
                     return resp
         except Exception as e:
             logger.warning(f"Model {model} failed: {e}")
@@ -218,7 +244,8 @@ async def call_llm(msgs):
 
 class IACog(commands.Cog):
     def __init__(self, bot):
-        self.bot = bot; self.last: Dict[Tuple[int,int],float] = {}
+        self.bot = bot
+        self.last: Dict[Tuple[int, int], float] = {}
 
     async def cog_load(self):
         await service.start(addr="0.0.0.0", port=8000)
@@ -227,83 +254,125 @@ class IACog(commands.Cog):
 
     @tasks.loop(hours=24)
     async def refresh_embeddings(self):
-        col.delete_collection(); await build_vector_db()
+        col.delete_collection()
+        await build_vector_db()
 
     async def _chat_stream(self, prompt: str, lang: str):
         cached_db = db_get_cached(prompt)
-        if cached_db: yield cached_db; return
+        if cached_db:
+            yield cached_db
+            return
+
         key = normalize(prompt)
-        if key in CACHE_TTL: yield CACHE_TTL[key]; return
-        sys_p = PROMPT_EN if lang=='en' else PROMPT_PT
+        if key in CACHE_TTL:
+            yield CACHE_TTL[key]
+            return
+
+        sys_p = PROMPT_EN if lang == 'en' else PROMPT_PT
         ctx = retrieve_ctx(prompt)
-        msgs=[{"role":"system","content":sys_p}, {"role":"system","content":f"Context: {ctx}"}, {"role":"user","content":prompt}]
-        full=""
+        msgs = [
+            {"role": "system", "content": sys_p},
+            {"role": "system", "content": f"Context: {ctx}"},
+            {"role": "user", "content": prompt}
+        ]
+        full = ""
         try:
             resp = await call_llm(msgs)
-        except Exception as e:
+        except Exception:
             yield "❌ Desculpe, a IA está indisponível agora."
             return
+
         for chunk in resp:
-            full+=chunk.choices[0].delta.content or ""; yield full
-        db_set_cached(prompt, full); CACHE_TTL[key]=full
+            full += chunk.choices[0].delta.content or ""
+            yield full
+
+        db_set_cached(prompt, full)
+        CACHE_TTL[key] = full
 
     async def _stream_to_channel(self, ch, prompt, ref=None, itx=None, eph=False):
-        lang = 'en' if detect(prompt)=='en' else 'pt'
-        if itx: await itx.edit_original_response(content="⌛ Pensando…")
-        else: thinking=await ch.send("⌛ Pensando…", reference=ref)
-        temp=itx if itx else thinking; final=""
+        lang = 'en' if detect(prompt) == 'en' else 'pt'
+        if itx:
+            await itx.edit_original_response(content="⌛ Pensando…")
+        else:
+            thinking = await ch.send("⌛ Pensando…", reference=ref)
+
+        temp = itx if itx else thinking
+        final = ""
         async for part in self._chat_stream(prompt, lang):
-            final=part; snippet=final[-MAX_LEN:]
+            final = part
+            snippet = final[-MAX_LEN:]
             try:
-                if itx: await itx.edit_original_response(content=snippet)
-                else: await temp.edit(content=snippet)
-            except discord.HTTPException: pass
+                if itx:
+                    await itx.edit_original_response(content=snippet)
+                else:
+                    await temp.edit(content=snippet)
+            except discord.HTTPException:
+                pass
+
         title = final.split('.')[0][:50] or ICON
         emb = discord.Embed(title=title, description=final, color=COLOR)
         emb.set_footer(text=f"Assistente • {SERVER}")
-        if itx: await itx.edit_original_response(content=None, embed=emb)
-        else: await temp.edit(content=None, embed=emb)
+        view = make_link_view(final)
+
+        if itx:
+            await itx.edit_original_response(content=None, embed=emb, view=view)
+        else:
+            await temp.edit(content=None, embed=emb, view=view)
 
     @commands.Cog.listener("on_message")
     async def auto(self, msg: discord.Message):
-        if msg.author.bot or '?' not in msg.content: return
-        key=(msg.channel.id,msg.author.id)
-        if time.time()-self.last.get(key,0)<COOLDOWN: return
-        await self._stream_to_channel(msg.channel,msg.content,ref=msg)
-        self.last[key]=time.time()
+        if msg.author.bot or '?' not in msg.content:
+            return
+        key = (msg.channel.id, msg.author.id)
+        if time.time() - self.last.get(key, 0) < COOLDOWN:
+            return
+        await self._stream_to_channel(msg.channel, msg.content, ref=msg)
+        self.last[key] = time.time()
 
     @app_commands.command(name="ia", description="Pergunte algo sobre 7DTD / Conan")
     @app_commands.describe(pergunta="Sua dúvida")
-    async def ia(self,itx:discord.Interaction, pergunta:str):
+    async def ia(self, itx: discord.Interaction, pergunta: str):
         await itx.response.defer(ephemeral=True)
         await self._stream_to_channel(itx.channel, pergunta, itx=itx, eph=True)
 
     @app_commands.command(name="doc", description="Link rápido de guia")
     @app_commands.describe(termo="Ex.: forja, blood moon…")
-    async def doc(self,itx:discord.Interaction, termo:str):
-        for k,url in DOCS.items():
-            if k in termo.lower(): return await itx.response.send_message(f"🔗 {url}", ephemeral=True)
+    async def doc(self, itx: discord.Interaction, termo: str):
+        termo_lower = termo.lower()
+        for k, url in DOCS.items():
+            if k in termo_lower:
+                view = ui.View()
+                view.add_item(ui.Button(label=k.title(), url=url))
+                return await itx.response.send_message("🔗 Aqui está o guia:", view=view, ephemeral=True)
         await itx.response.send_message("❌ Nenhum documento encontrado.", ephemeral=True)
 
     @app_commands.command(name="ia_clearcache", description="Limpa todo cache da IA (owner)")
-    async def clearcache(self,itx:discord.Interaction):
-        if itx.user.id!=OWNER_ID: return await itx.response.send_message("Só o dono. 🚫",ephemeral=True)
+    async def clearcache(self, itx: discord.Interaction):
+        if itx.user.id != OWNER_ID:
+            return await itx.response.send_message("Só o dono. 🚫", ephemeral=True)
         await itx.response.defer(ephemeral=True)
-        with SessionLocal() as db: db.query(AICache).delete(); db.commit()
+        with SessionLocal() as db:
+            db.query(AICache).delete()
+            db.commit()
         CACHE_TTL.clear()
-        await itx.followup.send("Cache limpo! ✅",ephemeral=True)
+        await itx.followup.send("Cache limpo! ✅", ephemeral=True)
 
     @app_commands.command(name="ia_ping", description="Latência da IA")
-    async def ia_ping(self,itx:discord.Interaction):
-        t0=time.perf_counter(); gen=self._chat_stream("ping",'pt'); await gen.asend(None)
-        await itx.response.send_message(f"🏓 {int((time.perf_counter()-t0)*1000)} ms")
+    async def ia_ping(self, itx: discord.Interaction):
+        t0 = time.perf_counter()
+        gen = self._chat_stream("ping", 'pt')
+        await gen.asend(None)
+        await itx.response.send_message(f"🏓 {int((time.perf_counter() - t0) * 1000)} ms")
 
     @app_commands.command(name="ia_recarregar", description="Recria RAG index (owner)")
-    async def recarregar(self,itx:discord.Interaction):
-        if itx.user.id!=OWNER_ID: return await itx.response.send_message("Só o dono. 🚫",ephemeral=True)
+    async def recarregar(self, itx: discord.Interaction):
+        if itx.user.id != OWNER_ID:
+            return await itx.response.send_message("Só o dono. 🚫", ephemeral=True)
         await itx.response.defer(ephemeral=True)
-        col.delete_collection(); await build_vector_db()
-        await itx.followup.send("RAG index recriado! ✅",ephemeral=True)
+        col.delete_collection()
+        await build_vector_db()
+        await itx.followup.send("RAG index recriado! ✅", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(IACog(bot))
+```
