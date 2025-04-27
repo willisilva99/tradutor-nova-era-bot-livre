@@ -22,6 +22,7 @@ from tenacity import AsyncRetrying, stop_after_attempt, wait_exponential
 from loguru import logger
 from aioprometheus import Counter, Registry
 from aioprometheus.service import Service
+from aioprometheus.service import Service
 
 # Importa cache persistente em banco e função normalize
 from sqlalchemy.exc import SQLAlchemyError
