@@ -83,6 +83,8 @@ PROMPT_EN = textwrap.dedent(f"""
 CACHE_TTL = TTLCache(maxsize=2048, ttl=43200)  # 12h cache rápido
 COOLDOWN  = 60  # cooldown por usuário (s)
 MAX_LEN   = 4000
+COLOR     = 0x8E2DE2
+ICON      = "🧟"
 
 # ─────────────────────────── Funções de cache em DB
 
@@ -212,6 +214,7 @@ class IACog(commands.Cog):
             thinking = await ch.send("⌛ Pensando…", reference=ref)
         # Streaming e coleta final
         final_text = ""
+        temp_msg   = itx if itx else thinking
         async for partial in self._chat_stream(prompt, lang):
             final_text = partial
             snippet    = final_text[-MAX_LEN:]
@@ -219,7 +222,7 @@ class IACog(commands.Cog):
                 if itx:
                     await itx.edit_original_response(content=snippet)
                 else:
-                    await thinking.edit(content=snippet)
+                    await temp_msg.edit(content=snippet)
             except discord.HTTPException:
                 pass
         # Embed final
@@ -232,7 +235,7 @@ class IACog(commands.Cog):
         if itx:
             await itx.edit_original_response(content=None, embed=embed)
         else:
-            await thinking.edit(content=None, embed=embed)
+            await temp_msg.edit(content=None, embed=embed)
 
     @commands.Cog.listener("on_message")
     async def auto(self, msg: discord.Message):
