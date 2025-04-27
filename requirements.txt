@@ -15,5 +15,6 @@ langchain-core>=0.2.0
 requests
 beautifulsoup4
 huggingface_hub[hf_xet]>=0.23.0
-sqlalchemy
-psycopg2-binary 
+cachetools
+langdetect
+tqdm
