@@ -290,27 +290,51 @@ class IACog(commands.Cog):
         CACHE_TTL[key] = full
 
     async def _stream_to_channel(self, ch, prompt, ref=None, itx=None, eph=False):
-        lang = 'en' if detect(prompt)=='en' else 'pt'
         if itx:
             await itx.edit_original_response(content="⌛ Pensando…")
         else:
             thinking = await ch.send("⌛ Pensando…", reference=ref)
-        temp  = itx or thinking
+        temp = itx or thinking
+
+        content = prompt.lower()
+        me      = self.bot.user.id
+        # dispara se '?' em content ou comando 'ia ' ou menção
+        if not ('?' in content or content.startswith('ia ') or me in [u.id for u in (await ch.guild.fetch_member(me)).roles]):
+            # (isso é ignorado aqui, pois on_message trata; mantém coerência)
+            pass
+
+        lang = 'en' if detect(prompt)=='en' else 'pt'
+        sys_p = PROMPT_EN if lang=='en' else PROMPT_PT
         final = ""
-        async for part in self._chat_stream(prompt, lang):
-            final = part
-            snippet = final[-MAX_LEN:]
-            try:
-                if itx:
-                    await itx.edit_original_response(content=snippet)
-                else:
-                    await temp.edit(content=snippet)
-            except discord.HTTPException:
-                pass
+
+        try:
+            async with asyncio.timeout(30):
+                async for part in self._chat_stream(prompt, lang):
+                    final = part
+                    snippet = final[-MAX_LEN:]
+                    try:
+                        if itx:
+                            await itx.edit_original_response(content=snippet)
+                        else:
+                            await temp.edit(content=snippet)
+                    except discord.HTTPException:
+                        pass
+        except asyncio.TimeoutError:
+            # fallback sem stream
+            fallback = await asyncio.to_thread(
+                client.chat.completions.create,
+                model=MODEL_MAIN,
+                messages=[{"role":"system","content":sys_p},{"role":"user","content":prompt}],
+                temperature=0.3,
+                max_tokens=512
+            )
+            final = fallback.choices[0].message.content
+
         title = final.split('.')[0][:50] or ICON
         emb   = discord.Embed(title=title, description=final, color=COLOR)
         emb.set_footer(text=f"Assistente • {SERVER}")
         view  = make_link_view(final)
+
         if itx:
             await itx.edit_original_response(content=None, embed=emb, view=view)
         else:
@@ -318,10 +342,16 @@ class IACog(commands.Cog):
 
     @commands.Cog.listener("on_message")
     async def auto(self, msg: discord.Message):
-        if msg.author.bot or '?' not in msg.content:
+        if msg.author.bot:
+            return
+        content = msg.content.lower()
+        me      = self.bot.user.id
+        if ('?' not in content 
+            and not content.startswith('ia ') 
+            and me not in [u.id for u in msg.mentions]):
             return
         key = (msg.channel.id, msg.author.id)
-        if time.time() - self.last.get(key,0) < COOLDOWN:
+        if time.time() - self.last.get(key, 0) < COOLDOWN:
             return
         await self._stream_to_channel(msg.channel, msg.content, ref=msg)
         self.last[key] = time.time()
@@ -346,7 +376,7 @@ class IACog(commands.Cog):
     async def status(self, itx: discord.Interaction):
         await itx.response.defer(ephemeral=True)
         try:
-            info = await cami_request("")  # GET /servers/<ID>
+            info = await cami_request("")
         except Exception as e:
             return await itx.followup.send(f"❌ Erro API CAMI: {e}", ephemeral=True)
         attrs  = info.get("attributes", {})
