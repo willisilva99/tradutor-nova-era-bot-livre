@@ -8,3 +8,7 @@ rcon
 PyNaCl
 openai>=1.14.3
 python-dotenv>=1.0.1
+chromadb
+sentence-transformers
+langchain-community>=0.2.0
+langchain-core>=0.2.0
