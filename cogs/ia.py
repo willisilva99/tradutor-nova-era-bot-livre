@@ -19,7 +19,7 @@ load_dotenv()
 
 API_BASE = os.getenv("OPENAI_API_BASE", "https://api.deepinfra.com/v1/openai")
 API_KEY  = os.getenv("OPENAI_API_KEY")          # ex.: di_abcd1234…
-MODEL_ID = os.getenv("OPENAI_MODEL", "meta-llama/llama-3-8b-instruct")
+MODEL_ID = os.getenv("OPENAI_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
 
 if not API_KEY:
     raise RuntimeError("OPENAI_API_KEY não definido!")
