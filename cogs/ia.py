@@ -34,28 +34,28 @@ from db import SessionLocal, AICache, normalize
 load_dotenv()
 
 # OpenAI
-API_BASE   = os.getenv("OPENAI_API_BASE", "https://api.deepinfra.com/v1/openai")
+API_BASE   = os.getenv("OPENAI_API_BASE",   "https://api.deepinfra.com/v1/openai")
 API_KEY    = os.getenv("OPENAI_API_KEY")
-MODEL_MAIN = os.getenv("OPENAI_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
+MODEL_MAIN = os.getenv("OPENAI_MODEL",      "meta-llama/Meta-Llama-3-8B-Instruct")
 MODEL_FALL = os.getenv("OPENAI_MODEL_FALLBACK", "mistralai/Mistral-7B-Instruct-v0.2")
 
 # Bot & Server
-OWNER_ID = int(os.getenv("OWNER_ID", "470628393272999948"))
-SERVER   = os.getenv("SERVER_NAME", "Anarquia Z")
+OWNER_ID = int(os.getenv("OWNER_ID",      "470628393272999948"))
+SERVER   = os.getenv("SERVER_NAME",       "Anarquia Z")
 
-# CAMI Host panel API (preencha no Railway)
+# CAMI Host panel API
 PANEL_URL   = os.getenv("CAMI_API_BASE")    # ex: https://painel.camy.host/api/client
-PANEL_TOKEN = os.getenv("CAMI_API_TOKEN")   # seu token CAMI
-SERVER_ID   = os.getenv("CAMI_SERVER_ID")   # ID do seu servidor na CAMI
+PANEL_TOKEN = os.getenv("CAMI_API_TOKEN")   # seu token
+SERVER_ID   = os.getenv("CAMI_SERVER_ID")   # ID do servidor
 
 if not API_KEY:
     raise RuntimeError("OPENAI_API_KEY não definido!")
 
-# ─────────────── utilitário CAMI API ──────────────────────────────────────────
+# utilitário CAMI API
 async def cami_request(path: str, method: str = "GET", json: Optional[dict] = None) -> dict:
     headers = {
         "Authorization": f"Bearer {PANEL_TOKEN}",
-        "Content-Type": "application/json"
+        "Content-Type":    "application/json"
     }
     url = f"{PANEL_URL}/servers/{SERVER_ID}{path}"
     async with aiohttp.ClientSession() as sess:
@@ -63,7 +63,7 @@ async def cami_request(path: str, method: str = "GET", json: Optional[dict] = No
         resp.raise_for_status()
         return await resp.json()
 
-# ─────────────────────────── RAG LINKS & DOCS ──────────────────────────────────
+# RAG LINKS & DOCS
 LINKS = [
     "https://anarquia-z.netlify.app/",
     "https://7daystodie.com/",
@@ -88,17 +88,15 @@ LINKS = [
     "https://next.nexusmods.com/profile/NoVaErAPvE?gameId=1059",
     "https://www.youtube.com/c/TheOfficial7DaysToDie"
 ]
-
 DOCS = {
     "forja":      "https://7daystodie.fandom.com/wiki/Forging_System",
     "blood moon": "https://7daystodie.fandom.com/wiki/Blood_Moon_Horde",
     "zumbis":     "https://7daystodie.fandom.com/wiki/List_of_Zombies",
 }
 
-# ─────────────── Cliente OpenAI, embeddings e ChromaDB ─────────────────────────
+# Cliente OpenAI, embeddings e ChromaDB
 client   = OpenAI(base_url=API_BASE, api_key=API_KEY, timeout=30)
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
-
 from chromadb.config import Settings
 if os.getenv("PGVECTOR_URL"):
     chroma_client = chromadb.PersistentClient(settings=Settings(
@@ -110,9 +108,9 @@ else:
     chroma_client = chromadb.PersistentClient(path="chromadb")
 col = chroma_client.get_or_create_collection("anarquia_z_rag")
 
-# ─────────────────────────── Pooling em RAM ─────────────────────────────────────
-_mem_docs: List[str]         = []
-_mem_vecs: List[np.ndarray]  = []
+# Pooling em RAM
+_mem_docs: List[str]        = []
+_mem_vecs: List[np.ndarray] = []
 
 PROMPT_PT = textwrap.dedent(f"""
 Você está falando com a **Assistente Z** 🤖, a IA oficial do servidor **{SERVER}** (IP: 191.37.92.145:26920).
@@ -120,7 +118,6 @@ Você está falando com a **Assistente Z** 🤖, a IA oficial do servidor **{SER
 • Responda **apenas** sobre 7 Days to Die, mods, gameplay, status e suporte.
 • Se perguntarem quem é o dono, mencione <@{OWNER_ID}>.
 """)
-
 PROMPT_EN = textwrap.dedent(f"""
 You are **Assistant Z** 🤖, the official AI of the **{SERVER}** server.
 • Your expertise is support and info about **7 Days to Die** 🔨 and **{SERVER}**.
@@ -128,30 +125,31 @@ You are **Assistant Z** 🤖, the official AI of the **{SERVER}** server.
 • If asked who the owner is, mention <@{OWNER_ID}>.
 """)
 
-# ─────────────────────────── Métricas Prometheus ───────────────────────────────
+# Métricas Prometheus
 registry     = Registry()
 CACHE_HITS   = Counter("ia_cache_hits",   "Cache DB hits")
 CACHE_MISSES = Counter("ia_cache_misses", "Cache DB misses")
 API_CALLS    = Counter("ia_api_calls",    "API calls count")
 TOKENS_USED  = Counter("ia_tokens_used",  "Total tokens used")
-for metric in (CACHE_HITS, CACHE_MISSES, API_CALLS, TOKENS_USED):
-    registry.register(metric)
+for m in (CACHE_HITS, CACHE_MISSES, API_CALLS, TOKENS_USED):
+    registry.register(m)
 service = Service()
 
-# ─────────────────────────── Controle e cache ───────────────────────────────────
+# Controle e cache
 CACHE_TTL = TTLCache(maxsize=2048, ttl=43200)
 COOLDOWN  = 60
 MAX_LEN   = 4000
 COLOR     = 0x8E2DE2
 ICON      = "🧟"
 
-# ───────────────────── Regex e View de botões para links ───────────────────────
+# Regex e View de botões para links
 URL_REGEX = re.compile(r'(https?://[^\s]+)')
 def make_link_view(text: str) -> ui.View:
     view = ui.View()
     seen = set()
     for url in URL_REGEX.findall(text):
-        if url in seen: continue
+        if url in seen:
+            continue
         seen.add(url)
         label = url.replace("https://","").replace("http://","")
         if len(label) > 40:
@@ -159,7 +157,7 @@ def make_link_view(text: str) -> ui.View:
         view.add_item(ui.Button(label=label, url=url))
     return view
 
-# ────────────────────────── Cache DB helpers ────────────────────────────────────
+# Cache DB helpers
 def db_get_cached(raw_q: str) -> Optional[str]:
     key = normalize(raw_q)
     with SessionLocal() as db:
@@ -185,12 +183,12 @@ def db_set_cached(raw_q: str, ans: str):
             db.rollback()
             logger.error(f"AI-Cache error: {e}")
 
-# ────────────────────────── RAG helpers & pooling ───────────────────────────────
+# RAG helpers & pooling
 def _clean(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     for t in soup(["script","style","noscript"]):
         t.decompose()
-    return re.sub(r"\s+"," ", soup.get_text(" ")).strip()
+    return re.sub(r"\s+", " ", soup.get_text(" ")).strip()
 
 def _chunk(text: str, size: int = 500) -> List[str]:
     w = text.split()
@@ -200,7 +198,7 @@ async def _download(session, url: str) -> str:
     try:
         async with session.get(url, timeout=30) as r:
             return await r.text()
-    except Exception:
+    except:
         return ""
 
 async def build_vector_db():
@@ -227,14 +225,14 @@ def retrieve_ctx(question: str, k: int = 5) -> str:
     idxs = sorted(range(len(sims)), key=lambda i: -sims[i])[:k]
     return "\n---\n".join(_mem_docs[i] for i in idxs)
 
-# ───────────────────────── LLM call com retry e fallback ─────────────────────────
+# LLM call com retry e fallback
 async def call_llm(msgs):
     for model in (MODEL_MAIN, MODEL_FALL):
         try:
             async for attempt in AsyncRetrying(
                 reraise=True,
                 stop=stop_after_attempt(3),
-                wait=wait_exponential(1, 10)
+                wait=wait_exponential(1,10)
             ):
                 with attempt:
                     resp = await asyncio.to_thread(
@@ -247,7 +245,7 @@ async def call_llm(msgs):
                     )
                     API_CALLS.inc({"model": model})
                     return resp
-        except Exception:
+        except:
             continue
     raise RuntimeError("All models failed")
 
@@ -269,42 +267,34 @@ class IACog(commands.Cog):
     async def _chat_stream(self, prompt: str, lang: str):
         cached = db_get_cached(prompt)
         if cached:
-            yield cached
-            return
-
+            yield cached; return
         key = normalize(prompt)
         if key in CACHE_TTL:
-            yield CACHE_TTL[key]
-            return
-
-        sys_p = PROMPT_EN if lang == 'en' else PROMPT_PT
+            yield CACHE_TTL[key]; return
+        sys_p = PROMPT_EN if lang=='en' else PROMPT_PT
         ctx   = retrieve_ctx(prompt)
         msgs  = [
-            {"role": "system", "content": sys_p},
-            {"role": "system", "content": f"Context: {ctx}"},
-            {"role": "user",   "content": prompt}
+            {"role":"system","content":sys_p},
+            {"role":"system","content":f"Context: {ctx}"},
+            {"role":"user",  "content":prompt}
         ]
         full = ""
         try:
             stream = await call_llm(msgs)
-        except Exception:
-            yield "❌ IA indisponível."
-            return
-
+        except:
+            yield "❌ IA indisponível."; return
         async for chunk in stream:
             full += chunk.choices[0].delta.content or ""
             yield full
-
         db_set_cached(prompt, full)
         CACHE_TTL[key] = full
 
     async def _stream_to_channel(self, ch, prompt, ref=None, itx=None, eph=False):
-        lang = 'en' if detect(prompt) == 'en' else 'pt'
+        lang = 'en' if detect(prompt)=='en' else 'pt'
         if itx:
             await itx.edit_original_response(content="⌛ Pensando…")
         else:
             thinking = await ch.send("⌛ Pensando…", reference=ref)
-
         temp  = itx or thinking
         final = ""
         async for part in self._chat_stream(prompt, lang):
@@ -317,12 +307,10 @@ class IACog(commands.Cog):
                     await temp.edit(content=snippet)
             except discord.HTTPException:
                 pass
-
         title = final.split('.')[0][:50] or ICON
         emb   = discord.Embed(title=title, description=final, color=COLOR)
         emb.set_footer(text=f"Assistente • {SERVER}")
         view  = make_link_view(final)
-
         if itx:
             await itx.edit_original_response(content=None, embed=emb, view=view)
         else:
@@ -333,7 +321,7 @@ class IACog(commands.Cog):
         if msg.author.bot or '?' not in msg.content:
             return
         key = (msg.channel.id, msg.author.id)
-        if time.time() - self.last.get(key, 0) < COOLDOWN:
+        if time.time() - self.last.get(key,0) < COOLDOWN:
             return
         await self._stream_to_channel(msg.channel, msg.content, ref=msg)
         self.last[key] = time.time()
@@ -358,16 +346,37 @@ class IACog(commands.Cog):
     async def status(self, itx: discord.Interaction):
         await itx.response.defer(ephemeral=True)
         try:
-            data = await cami_request("/status")
+            info = await cami_request("")  # GET /servers/<ID>
         except Exception as e:
             return await itx.followup.send(f"❌ Erro API CAMI: {e}", ephemeral=True)
-
+        attrs  = info.get("attributes", {})
+        status = attrs.get("status", "—")
+        players= attrs.get("players", 0)
+        maxp   = attrs.get("max_players", 0)
+        try:
+            res     = await cami_request("/resources")
+            r_attrs = res.get("attributes", {})
+            cpu     = r_attrs.get("cpu_absolute", 0.0)
+            ram_mb  = r_attrs.get("memory_bytes", 0) // (1024**2)
+        except:
+            cpu = ram_mb = None
         emb = discord.Embed(title="📡 Status Anarquia Z", color=COLOR)
-        emb.add_field(name="Online",    value=str(data.get("online", False)))
-        emb.add_field(name="Jogadores", value=f"{data.get('players', 0)}/{data.get('maxPlayers', 0)}")
-        emb.add_field(name="Versão",    value=data.get("version", "—"))
+        emb.add_field(name="Status",    value=status, inline=True)
+        emb.add_field(name="Jogadores", value=f"{players}/{maxp}", inline=True)
+        if cpu is not None:
+            emb.add_field(name="CPU (%)",  value=f"{cpu:.1f}", inline=True)
+            emb.add_field(name="RAM (MB)", value=str(ram_mb), inline=True)
         emb.set_footer(text=f"Atualizado em {datetime.utcnow():%d/%m/%Y %H:%M UTC}")
         await itx.followup.send(embed=emb, ephemeral=True)
+
+    @app_commands.command(name="restart", description="🔄 Reinicia o servidor Anarquia Z")
+    async def restart(self, itx: discord.Interaction):
+        await itx.response.defer(ephemeral=True)
+        try:
+            await cami_request("/power", method="POST", json={"signal":"restart"})
+        except Exception as e:
+            return await itx.followup.send(f"❌ Erro ao reiniciar: {e}", ephemeral=True)
+        await itx.followup.send("🔄 Servidor reiniciado com sucesso!", ephemeral=True)
 
     @app_commands.command(name="ia_clearcache", description="Limpa cache IA (owner)")
     async def clearcache(self, itx: discord.Interaction):
@@ -380,23 +389,21 @@ class IACog(commands.Cog):
         CACHE_TTL.clear()
         await itx.followup.send("Cache limpo! ✅", ephemeral=True)
 
-    @app_commands.command(name="ia_ping", description="Latência da IA")
+    @app_commands.command(name="ia_ping", description="🏓 Latência da IA")
     async def ia_ping(self, itx: discord.Interaction):
         t0 = time.perf_counter()
         gen = self._chat_stream("ping", 'pt')
         await gen.asend(None)
-        await itx.response.send_message(f"🏓 {int((time.perf_counter() - t0) * 1000)} ms")
+        await itx.response.send_message(f"🏓 {int((time.perf_counter()-t0)*1000)} ms")
 
-    @app_commands.command(name="ia_recarregar", description="Recria RAG index (owner)")
+    @app_commands.command(name="ia_recarregar", description="♻️ Recria RAG index (owner)")
     async def recarregar(self, itx: discord.Interaction):
         if itx.user.id != OWNER_ID:
             return await itx.response.send_message("Só o dono. 🚫", ephemeral=True)
         await itx.response.defer(ephemeral=True)
         col.delete_collection()
         await build_vector_db()
-        await itx.followup.send("RAG index recriado! ✅", ephemeral=True)
-
-    # Adicione aqui outros comandos CAMI, ex: /restart, /broadcast, usando cami_request()
+        await itx.followup.send("♻️ RAG index recriado! ✅", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(IACog(bot))
