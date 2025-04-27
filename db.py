@@ -65,7 +65,13 @@ class GuildConfig(Base):
     staff_role_id           = Column(String, nullable=True)
     verificado_role_id      = Column(String, nullable=True)
     # Se quiser mais campos (wait_time, etc.), adicione aqui.
-
+# ───────── NOVA tabela – cache da IA ─────────
+class AICache(Base):
+    __tablename__ = "ai_cache"
+    id         = Column(Integer, primary_key=True)
+    question   = Column(Text, unique=True, nullable=False)
+    answer     = Column(Text, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow)
 # Cria as tabelas se não existirem
 try:
     Base.metadata.create_all(engine, checkfirst=True)
