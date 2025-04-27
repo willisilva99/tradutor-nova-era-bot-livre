@@ -36,22 +36,32 @@ MODEL_FALL = os.getenv("OPENAI_MODEL_FALLBACK", "mistralai/Mistral-7B-Instruct-v
 OWNER_ID   = 470628393272999948
 SERVER     = "Anarquia Z"
 
-# Fontes para RAG
+# Fontes para RAG (atualizadas)
 LINKS = [
-    "https://anarquia-z.netlify.app",
-    "https://conan-exiles.com/server/91181/",
-    "https://7daystodie-servers.com/server/151960/",
-    "https://7daystodie.com/v2-0-storms-brewing-status-update/",
-    "https://7daystodie.fandom.com/wiki/Beginners_Guide",
-    "https://7daystodie.fandom.com/wiki/Blood_Moon_Horde",
-    "https://7daystodie.fandom.com/wiki/List_of_Zombies",
-    "https://www.ign.com/wikis/7-days-to-die/Zombies_List",
-    "https://ultahost.com/blog/pt/top-5-piores-perks-em-7-days-to-die/",
-    "https://www.reddit.com/r/7daystodie/comments/p3ek6y/help_with_skills/?tl=pt-br",
-    "https://r.jina.ai/http://x.com/7daystodie",
+    "https://anarquia-z.netlify.app/",                         # Site oficial do servidor Anarquia Z
+    "https://7daystodie.com/",                                 # Site oficial do jogo
+    "https://7daystodie.com/changelog/",                      # Patch notes e release notes oficiais
+    "https://7daystodie.com/blogs/news/",                     # Notícias e atualizações (v1.0+)
+    "https://7daystodie.com/support/",                        # Suporte oficial e FAQ
+    "https://steamcommunity.com/app/251570/discussions/",     # Discussões Steam (PC)
+    "https://7daystodie.fandom.com/wiki/Beginners_Guide",     # Guia oficial para iniciantes
+    "https://7daystodie.fandom.com/wiki/1.0_Series",          # Página sobre a série 1.0
+    "https://7daystodie.fandom.com/wiki/Blood_Moon_Horde",    # Mecânicas de Blood Moon
+    "https://7daystodie.fandom.com/wiki/List_of_Zombies",     # Lista completa de zumbis
+    "https://7daystodie.fandom.com/wiki/Traps_and_Defenses",  # Armadilhas e defesas
+    "https://7daystodie.fandom.com/wiki/Perks",               # Sistema de Perks e Habilidades
+    "https://7daystodie.fandom.com/wiki/Weapon_Attachments", # Customizações de armas
+    "https://7daystodie.fandom.com/wiki/Alchemy_Page",       # Guia de Alquimia
+    "https://7daystodie.fandom.com/wiki/Technology_Tree",    # Tecnologia e crafting avançado
+    "https://navezgane.map/",                                 # Mapa interativo Navezgane
+    "https://developer.valvesoftware.com/wiki/7_Days_to_Die_Dedicated_Server_Setup",  # Setup de servidor dedicado
+    "https://7daystodie-servers.com/server/151960/",         # Lista de servidores (Anarquia Z exemplo)
+    "https://ultahost.com/blog/pt/top-5-piores-perks-em-7-days-to-die/", # Artigo de perks
+    "https://www.reddit.com/r/7daystodie/",                   # Comunidade Reddit
+    "https://next.nexusmods.com/profile/NoVaErAPvE?gameId=1059", # Perfil de mods (NoVaErAPvE)
+    "https://www.youtube.com/c/TheOfficial7DaysToDie"        # Canal oficial no YouTube
 ]
 
-# Atalhos /doc
 DOCS = {
     "forja": "https://7daystodie.fandom.com/wiki/Forging_System",
     "blood moon": "https://7daystodie.fandom.com/wiki/Blood_Moon_Horde",
