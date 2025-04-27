@@ -1,7 +1,8 @@
-# cogs/ia.py – IA + RAG + Streaming + Cache + Cooldown + /doc (2025-04-26)
+# cogs/ia.py – IA + RAG + Streaming + Cache(DB) + Cooldown + /doc (2025-04-26)
 
-import os, re, time, asyncio, textwrap, json
+import os, re, time, asyncio, textwrap
 from typing import Dict, List, Tuple
+from datetime import datetime
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -17,6 +18,10 @@ from cachetools import TTLCache
 from langdetect import detect
 from tqdm.asyncio import tqdm_asyncio
 
+# Importa cache persistente em banco
+from sqlalchemy.exc import SQLAlchemyError
+from db import SessionLocal, AICache
+
 # ────────────────────────── Config
 load_dotenv()
 API_BASE = os.getenv("OPENAI_API_BASE", "https://api.deepinfra.com/v1/openai")
@@ -25,7 +30,7 @@ MODEL_ID = os.getenv("OPENAI_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
 OWNER_ID = 470628393272999948
 SERVER   = "Anarquia Z"
 
-LINKS = [
+# Fontes para RAG\LINKS = [
     "https://anarquia-z.netlify.app",
     "https://conan-exiles.com/server/91181/",
     "https://7daystodie-servers.com/server/151960/",
@@ -39,15 +44,18 @@ LINKS = [
     "https://r.jina.ai/http://x.com/7daystodie",
 ]
 
-DOCS = {         # /doc atalho
+# Atalhos /doc
+DOCS = {
     "forja": "https://7daystodie.fandom.com/wiki/Forging_System",
     "blood moon": "https://7daystodie.fandom.com/wiki/Blood_Moon_Horde",
     "zumbis": "https://7daystodie.fandom.com/wiki/List_of_Zombies",
 }
 
+# Checa chave
 if not API_KEY:
     raise RuntimeError("OPENAI_API_KEY não definido!")
 
+# Inicializa cliente e vetores
 client   = OpenAI(base_url=API_BASE, api_key=API_KEY, timeout=30)
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 chroma   = chromadb.PersistentClient(path="chromadb")
@@ -59,7 +67,7 @@ PROMPT_PT = textwrap.dedent(f"""
     Especialista em 7 Days to Die 🔨 e Conan Exiles 🗡️
     Se perguntarem quem é o dono, responda <@{OWNER_ID}>.
     Quando fizer sentido, convide o jogador a entrar no **{SERVER}**.
-    Responda em português brasileiro, de forma acolhedora, clara e com emojis.
+    Responda em português brasileiro, de forma acolhedora, clara e use emojis.
 """)
 
 PROMPT_EN = textwrap.dedent(f"""
@@ -70,14 +78,39 @@ PROMPT_EN = textwrap.dedent(f"""
     Answer in friendly and concise English, using emojis when it fits.
 """)
 
-# ────────────────────────── Helpers (RAG)
+# ────────────────────────── Cache rapido e DB
+CACHE_TTL = TTLCache(maxsize=2048, ttl=43200)  # 12 h cache
+
+def db_get_cached(question: str) -> str | None:
+    with SessionLocal() as db:
+        row = db.query(AICache).filter_by(question=question).first()
+        return row.answer if row else None
+
+
+def db_set_cached(question: str, answer: str):
+    with SessionLocal() as db:
+        try:
+            row = db.query(AICache).filter_by(question=question).first()
+            if row:
+                row.answer = answer
+                row.updated_at = datetime.utcnow()
+            else:
+                db.add(AICache(question=question, answer=answer))
+            db.commit()
+        except SQLAlchemyError as e:
+            db.rollback()
+            print("[AI-Cache] ERRO:", e)
+
+# ────────────────────────── Helpers RAG
+
 def _clean(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     for t in soup(["script", "style", "noscript"]): t.decompose()
     return re.sub(r"\s+", " ", soup.get_text(" ")).strip()
 
-def _chunks(txt: str, size=500) -> List[str]:
-    w = txt.split()
+
+def _chunk(text: str, size=500) -> List[str]:
+    w = text.split()
     return [" ".join(w[i:i+size]) for i in range(0, len(w), size)]
 
 async def _download(session, url):
@@ -85,19 +118,21 @@ async def _download(session, url):
         async with session.get(url, timeout=30) as r:
             return await r.text()
     except Exception as e:
-        print(f"[RAG] Falhou {url[:60]}… {e}"); return ""
+        print(f"[RAG] Falhou {url[:60]}… {e}")
+        return ""
 
 async def build_vector_db():
     if col.count(): return
     print("[RAG] Construindo base…")
     headers = {"User-Agent":"Mozilla/5.0 (RAG-Bot)"}
     async with aiohttp.ClientSession(headers=headers) as sess:
-        html_pages = await tqdm_asyncio.gather(*[_download(sess,u) for u in LINKS])
-    for url, html in zip(LINKS, html_pages):
+        pages = await tqdm_asyncio.gather(*[_download(sess,u) for u in LINKS])
+    for url, html in zip(LINKS, pages):
         txt = _clean(html)
-        for i, chunk in enumerate(_chunks(txt)):
+        for i, chunk in enumerate(_chunk(txt)):
             col.add(ids=[f"{url}#{i}"], documents=[chunk], embeddings=[embedder.encode(chunk).tolist()])
-        print(f"[RAG] {url} ➜ {len(txt)//1000} k chars")
+        print(f"[RAG] {url} ➜ {len(txt)//1000}k chars")
+
 
 def retrieve_ctx(question: str, k=5) -> str:
     if not col.count(): return ""
@@ -106,119 +141,122 @@ def retrieve_ctx(question: str, k=5) -> str:
     return "\n---\n".join(res["documents"][0])
 
 # ────────────────────────── Cog
-COLOR = 0x8E2DE2; ICON="🧟"; MAX_LEN=4000
-COOLDOWN = 60   # por usuário
-
-cache = TTLCache(maxsize=2048, ttl=43200)  # 12 h
+COLOR = 0x8E2DE2
+ICON  = "🧟"
+MAX_LEN = 4000
+COOLDOWN = 60  # por usuário
 
 class IACog(commands.Cog):
-    def __init__(self, bot): self.bot, self.last: Dict[Tuple[int,int],float] = bot, {}
+    def __init__(self, bot):
+        self.bot = bot
+        self.last: Dict[Tuple[int,int],float] = {}
 
     async def cog_load(self):
         asyncio.create_task(build_vector_db())
         self.refresh_embeddings.start()
 
-    # atualização diária
     @tasks.loop(hours=24)
     async def refresh_embeddings(self):
         col.delete_collection()
         await build_vector_db()
 
-    # ---------------- Chat completa com streaming ----------------
-    async def _chat_stream(self, prompt: str, lang: str) -> str:
-        sys_prompt = PROMPT_EN if lang == "en" else PROMPT_PT
+    async def _chat_stream(self, prompt: str, lang: str):
+        key = prompt.lower().strip()
+        # verifica cache DB primeiro
+        cached_db = db_get_cached(key)
+        if cached_db:
+            yield cached_db
+            return
+        # ou cache rapido
+        if key in CACHE_TTL:
+            yield CACHE_TTL[key]
+            return
+        # build prompts
+        sys_prompt = PROMPT_EN if lang == 'en' else PROMPT_PT
         ctx = retrieve_ctx(prompt)
         msgs = [
             {"role":"system","content":sys_prompt},
             {"role":"system","content":f"Contexto:\n{ctx}"},
-            {"role":"user","content":prompt}
+            {"role":"user","content":prompt},
         ]
         response = await asyncio.to_thread(
             client.chat.completions.create,
-            model=MODEL_ID,
-            messages=msgs,
-            temperature=0.5,
-            max_tokens=512,
-            stream=True
+            model=MODEL_ID, messages=msgs,
+            temperature=0.5, max_tokens=512, stream=True
         )
         full_text = ""
         for chunk in response:
             delta = chunk.choices[0].delta
             full_text += delta.content or ""
-            yield full_text  # envia parcial
-        cache[prompt.lower().strip()] = full_text
+            yield full_text
+        # grava caches
+        db_set_cached(key, full_text)
+        CACHE_TTL[key] = full_text
 
-    # ---------------- Envio (com ⌛ e streaming) ----------------
     async def _stream_to_channel(self, ch, prompt, ref=None, itx=None, eph=False):
-        lang = "en" if detect(prompt) == "en" else "pt"
-        key  = prompt.lower().strip()
-        if key in cache:
-            return await self._final_embed(ch, cache[key], ref, itx, eph)
-
-        temp = await (itx.edit_original_response if itx else ch.send)("⌛ Pensando…", 
-                                                                      reference=ref, 
-                                                                      ephemeral=eph if itx else False)
-
+        lang = 'en' if detect(prompt) == 'en' else 'pt'
+        # envia pensando
+        if itx:
+            await itx.edit_original_response(content="⌛ Pensando…")
+        else:
+            thinking = await ch.send("⌛ Pensando…", reference=ref)
+        # streaming
+        temp = itx if itx else thinking
         async for partial in self._chat_stream(prompt, lang):
-            if len(partial) > MAX_LEN:  # evita exceder limite
-                partial = partial[-MAX_LEN:]
+            text = partial[-MAX_LEN:]
             try:
                 if itx:
-                    await itx.edit_original_response(content=partial[:MAX_LEN])
+                    await itx.edit_original_response(content=text)
                 else:
-                    await temp.edit(content=partial[:MAX_LEN])
+                    await thinking.edit(content=text)
             except discord.HTTPException:
                 pass
-
-        await self._final_embed(ch, cache.get(key, partial), ref, itx, eph, temp)
-
-    async def _final_embed(self, ch, txt, ref, itx, eph, temp_msg=None):
-        embed = discord.Embed(description=txt, color=COLOR, title=f"{ICON} Resposta")
+        # final embed
+        embed = discord.Embed(description=full_text, color=COLOR, title=f"{ICON} Resposta")
         embed.set_footer(text=f"Assistente • {SERVER}")
         if itx:
             await itx.edit_original_response(content=None, embed=embed)
         else:
-            await temp_msg.edit(content=None, embed=embed)
+            await thinking.edit(content=None, embed=embed)
 
-    # ---------------- Listener ----------------
     @commands.Cog.listener("on_message")
-    async def auto(self, m:discord.Message):
-        if m.author.bot or "?" not in m.content: return
-        key = (m.channel.id, m.author.id)
-        if time.time() - self.last.get(key,0) < COOLDOWN: return
-        await self._stream_to_channel(m.channel, m.content, ref=m)
+    async def auto(self, msg: discord.Message):
+        if msg.author.bot or '?' not in msg.content: return
+        key = (msg.channel.id, msg.author.id)
+        if time.time() - self.last.get(key, 0) < COOLDOWN: return
+        await self._stream_to_channel(msg.channel, msg.content, ref=msg)
         self.last[key] = time.time()
 
-    # ---------------- Slash ----------------
     @app_commands.command(name="ia", description="Pergunte algo sobre 7DTD / Conan")
     @app_commands.describe(pergunta="Sua dúvida")
-    async def ia(self, itx:discord.Interaction, pergunta:str):
+    async def ia(self, itx: discord.Interaction, pergunta: str):
         await itx.response.defer(ephemeral=True)
         await self._stream_to_channel(itx.channel, pergunta, itx=itx, eph=True)
 
-    # ---------------- Doc ----------------
     @app_commands.command(name="doc", description="Link rápido de guia")
     @app_commands.describe(termo="Ex.: forja, blood moon…")
-    async def doc(self, itx:discord.Interaction, termo:str):
+    async def doc(self, itx: discord.Interaction, termo: str):
         termo_l = termo.lower()
         for k, url in DOCS.items():
             if k in termo_l:
                 return await itx.response.send_message(f"🔗 {url}", ephemeral=True)
         await itx.response.send_message("❌ Nenhum documento encontrado.", ephemeral=True)
 
-    # ---------------- Ping ----------------
     @app_commands.command(name="ia_ping", description="Latência da IA")
-    async def ia_ping(self,itx:discord.Interaction):
-        t0=time.perf_counter(); _=await self._chat_stream("ping","pt").__anext__()
-        await itx.response.send_message(f"🏓 {int((time.perf_counter()-t0)*1e3)} ms")
+    async def ia_ping(self, itx: discord.Interaction):
+        t0 = time.perf_counter()
+        gen = self._chat_stream("ping", 'pt')
+        await gen.asend(None)
+        await itx.response.send_message(f"🏓 {int((time.perf_counter() - t0) * 1e3)} ms")
 
-    # ---------------- Recarregar ----------------
     @app_commands.command(name="ia_recarregar", description="Recarrega base (owner)")
-    async def recarregar(self,itx:discord.Interaction):
+    async def recarregar(self, itx: discord.Interaction):
         if itx.user.id != OWNER_ID:
             return await itx.response.send_message("Só o dono. 🚫", ephemeral=True)
         await itx.response.defer(ephemeral=True)
-        col.delete_collection(); await build_vector_db()
+        col.delete_collection()
+        await build_vector_db()
         await itx.followup.send("Base recarregada! ✅", ephemeral=True)
 
-async def setup(bot): await bot.add_cog(IACog(bot))
+async def setup(bot):
+    await bot.add_cog(IACog(bot))
