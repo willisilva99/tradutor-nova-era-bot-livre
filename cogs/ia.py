@@ -20,7 +20,8 @@ from langdetect import detect
 from tqdm.asyncio import tqdm_asyncio
 from tenacity import AsyncRetrying, stop_after_attempt, wait_exponential
 from loguru import logger
-from aioprometheus import Counter, Registry, Service
+from aioprometheus import Counter, Registry
+from aioprometheus.service import Service
 
 # Importa cache persistente em banco e função normalize
 from sqlalchemy.exc import SQLAlchemyError
