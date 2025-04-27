@@ -41,7 +41,7 @@ SYSTEM_PROMPT = (
     "e diga que não pode ajudar."
 )
 
-MODEL_NAME = os.getenv("OPENAI_MODEL", "deepseek-ai/deepseek-chat")
+MODEL_NAME = os.getenv("OPENAI_MODEL", "https://api.deepinfra.com/v1/openai")
 COOLDOWN_SECONDS = 60   # flood-control por canal
 
 
