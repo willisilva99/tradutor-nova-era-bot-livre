@@ -41,7 +41,7 @@ SYSTEM_PROMPT = (
     "e diga que não pode ajudar."
 )
 
-MODEL_NAME = os.getenv("OPENAI_MODEL", "mistral-7b-instruct")
+MODEL_NAME = os.getenv("OPENAI_MODEL", "mistralai/mistral-7b-instruct-v0.2")
 COOLDOWN_SECONDS = 60   # flood-control por canal
 
 
