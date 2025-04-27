@@ -18,7 +18,7 @@ from openai import OpenAI, OpenAIError   # novo client
 # ───────────────────────────────
 load_dotenv()
 
-API_BASE = os.getenv("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
+API_BASE = os.getenv("OPENAI_API_BASE", "openrouter/tinyllama-1.1b:free")
 API_KEY  = os.getenv("OPENAI_API_KEY")
 
 if not API_KEY:
