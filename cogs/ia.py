@@ -1,10 +1,15 @@
 import discord
 from discord.ext import commands
-import openai
 import os
+import aiohttp
+import json
 
-# Carregar a chave da API do DeepSeek/OpenAI da variável de ambiente no Railway
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Carregar a chave da API DeepSeek
+DEEPSEEK_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Configurações do bot
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 class IACog(commands.Cog):
     """Cog para respostas automáticas da IA quando a pergunta começar com '?'."""
@@ -25,32 +30,55 @@ class IACog(commands.Cog):
             print(f"📩 Pergunta recebida: {prompt}")  # Debug: mostrar a pergunta
 
             try:
-                # Enviar a pergunta para a IA (usando OpenAI ou DeepSeek)
-                print("🔄 Enviando requisição para a API...")  # Debug: indicar que a requisição foi feita
-                
-                # Nova interface da API com chat
-                response = openai.chat.Completion.create(
-                    model="gpt-3.5-turbo",  # ou gpt-4 se você tiver acesso
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ]
-                )
+                # Fazer a requisição para a API DeepSeek
+                response = await self.get_deepseek_response(prompt)
 
-                # Imprimir a resposta completa para debug
-                print(f"🌐 Resposta da IA: {response}")  # Debug: mostrar a resposta completa da API
-
-                answer = response['choices'][0]['message']['content'].strip()
-
-                # Enviar resposta da IA no Discord
-                await message.channel.send(f"**Resposta da IA:** {answer}")
+                # Enviar a resposta no Discord
+                await message.channel.send(f"**Resposta da IA:** {response}")
             except Exception as e:
-                # Se houver erro ao acessar a IA
                 print(f"❌ Erro ao acessar a IA: {e}")  # Debug: mostrar erro
                 await message.channel.send(f"❌ **Erro ao acessar a IA:** {e}")
 
         # Certifique-se de que os comandos do bot ainda sejam processados
         await self.bot.process_commands(message)
 
+    # Função para enviar a requisição para a API DeepSeek
+    async def get_deepseek_response(self, prompt: str) -> str:
+        url = "https://api.deepseek.com/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
+        }
+        data = {
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": "Você é um assistente útil."},
+                {"role": "user", "content": prompt}
+            ],
+            "stream": False
+        }
+
+        # Realizando a requisição assíncrona
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, data=json.dumps(data)) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return result['choices'][0]['message']['content']
+                else:
+                    raise Exception(f"Erro ao acessar a DeepSeek API: {response.status}")
+
 # Config de carregamento do cog
+@bot.event
+async def on_ready():
+    print(f"Bot conectado como {bot.user.name}")
+
+@bot.event
+async def on_disconnect():
+    print("Bot desconectado.")
+
+# Carregar os cogs
 async def setup(bot):
     await bot.add_cog(IACog(bot))
+
+# Iniciar o bot
+bot.run(os.getenv("DISCORD_TOKEN"))
