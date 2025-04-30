@@ -28,16 +28,17 @@ class IACog(commands.Cog):
                 # Enviar a pergunta para a IA (usando OpenAI ou DeepSeek)
                 print("🔄 Enviando requisição para a API...")  # Debug: indicar que a requisição foi feita
                 
-                # Nova interface da API
-                response = openai.chat.Completion.create(
-                    model="gpt-3.5-turbo",  # ou o modelo DeepSeek que você estiver usando
-                    messages=[{"role": "user", "content": prompt}],
+                # Nova interface da API com chat
+                response = openai.Completion.create(
+                    model="gpt-3.5-turbo",  # ou gpt-4 se você tiver acesso
+                    prompt=prompt,
+                    max_tokens=150
                 )
 
                 # Imprimir a resposta completa para debug
                 print(f"🌐 Resposta da IA: {response}")  # Debug: mostrar a resposta completa da API
 
-                answer = response['choices'][0]['message']['content']
+                answer = response['choices'][0]['text'].strip()
 
                 # Enviar resposta da IA no Discord
                 await message.channel.send(f"**Resposta da IA:** {answer}")
