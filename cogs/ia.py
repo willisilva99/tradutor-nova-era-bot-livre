@@ -7,10 +7,6 @@ import json
 # Carregar a chave da API DeepSeek
 DEEPSEEK_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Configurações do bot
-intents = discord.Intents.default()
-bot = commands.Bot(command_prefix="!", intents=intents)
-
 class IACog(commands.Cog):
     """Cog para respostas automáticas da IA quando a pergunta começar com '?'."""
 
@@ -39,9 +35,6 @@ class IACog(commands.Cog):
                 print(f"❌ Erro ao acessar a IA: {e}")  # Debug: mostrar erro
                 await message.channel.send(f"❌ **Erro ao acessar a IA:** {e}")
 
-        # Certifique-se de que os comandos do bot ainda sejam processados
-        await self.bot.process_commands(message)
-
     # Função para enviar a requisição para a API DeepSeek
     async def get_deepseek_response(self, prompt: str) -> str:
         url = "https://api.deepseek.com/v1/chat/completions"
@@ -67,18 +60,6 @@ class IACog(commands.Cog):
                 else:
                     raise Exception(f"Erro ao acessar a DeepSeek API: {response.status}")
 
-# Config de carregamento do cog
-@bot.event
-async def on_ready():
-    print(f"Bot conectado como {bot.user.name}")
-
-@bot.event
-async def on_disconnect():
-    print("Bot desconectado.")
-
-# Carregar os cogs
+# Função para carregar o Cog
 async def setup(bot):
     await bot.add_cog(IACog(bot))
-
-# Iniciar o bot
-bot.run(os.getenv("DISCORD_TOKEN"))
