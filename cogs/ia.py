@@ -3,9 +3,13 @@ from discord.ext import commands
 import os
 import aiohttp
 import json
+from dotenv import load_dotenv
 
-# Carregar a chave da API DeepSeek
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")  # Corrigido para usar DEEPSEEK_API_KEY
+# Carregar variáveis de ambiente do arquivo .env
+load_dotenv()
+
+# Carregar a chave da API do Gemini
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 class IACog(commands.Cog):
     """Cog para respostas automáticas da IA quando a pergunta começar com '?'."""
@@ -26,8 +30,8 @@ class IACog(commands.Cog):
             print(f"📩 Pergunta recebida: {prompt}")  # Debug: mostrar a pergunta
 
             try:
-                # Fazer a requisição para a API DeepSeek
-                response = await self.get_deepseek_response(prompt)
+                # Fazer a requisição para a API Gemini
+                response = await self.get_gemini_response(prompt)
 
                 # Enviar a resposta no Discord
                 await message.channel.send(f"**Resposta da IA:** {response}")
@@ -35,20 +39,17 @@ class IACog(commands.Cog):
                 print(f"❌ Erro ao acessar a IA: {e}")  # Debug: mostrar erro
                 await message.channel.send(f"❌ **Erro ao acessar a IA:** {e}")
 
-    # Função para enviar a requisição para a API DeepSeek
-    async def get_deepseek_response(self, prompt: str) -> str:
-        url = "https://api.deepseek.com/v1/chat/completions"
+    # Função para enviar a requisição para a API Gemini
+    async def get_gemini_response(self, prompt: str) -> str:
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
+            "Authorization": f"Bearer {GEMINI_API_KEY}"
         }
         data = {
-            "model": "deepseek-chat",
-            "messages": [
-                {"role": "system", "content": "Você é um assistente útil."},
-                {"role": "user", "content": prompt}
-            ],
-            "stream": False
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }]
         }
 
         # Realizando a requisição assíncrona
@@ -56,9 +57,13 @@ class IACog(commands.Cog):
             async with session.post(url, headers=headers, data=json.dumps(data)) as response:
                 if response.status == 200:
                     result = await response.json()
-                    return result['choices'][0]['message']['content']
+                    # Verificar se o resultado está estruturado corretamente
+                    try:
+                        return result['choices'][0]['parts'][0]['text']
+                    except KeyError:
+                        raise Exception("Erro na estrutura da resposta da API Gemini.")
                 else:
-                    raise Exception(f"Erro ao acessar a DeepSeek API: {response.status}")
+                    raise Exception(f"Erro ao acessar a Gemini API: {response.status}")
 
 # Função para carregar o Cog
 async def setup(bot):
