@@ -3,17 +3,8 @@ from discord.ext import commands
 import openai
 import os
 
-# Verifique se a chave da API está sendo carregada corretamente
-def check_api_key():
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("❌ **Chave da API não encontrada!**")
-    else:
-        print("✅ **Chave da API carregada corretamente.**")
-
 # Carregar a chave da API do DeepSeek/OpenAI da variável de ambiente no Railway
 openai.api_key = os.getenv("OPENAI_API_KEY")
-check_api_key()  # Chamada de verificação
 
 class IACog(commands.Cog):
     """Cog para respostas automáticas da IA quando a pergunta começar com '?'."""
@@ -36,16 +27,17 @@ class IACog(commands.Cog):
             try:
                 # Enviar a pergunta para a IA (usando OpenAI ou DeepSeek)
                 print("🔄 Enviando requisição para a API...")  # Debug: indicar que a requisição foi feita
-                response = openai.Completion.create(
-                    engine="text-davinci-003",  # ou o modelo DeepSeek que você estiver usando
-                    prompt=prompt,
-                    max_tokens=150
+                
+                # Nova interface da API
+                response = openai.chat.Completion.create(
+                    model="gpt-3.5-turbo",  # ou o modelo DeepSeek que você estiver usando
+                    messages=[{"role": "user", "content": prompt}],
                 )
 
                 # Imprimir a resposta completa para debug
                 print(f"🌐 Resposta da IA: {response}")  # Debug: mostrar a resposta completa da API
 
-                answer = response.choices[0].text.strip()
+                answer = response['choices'][0]['message']['content']
 
                 # Enviar resposta da IA no Discord
                 await message.channel.send(f"**Resposta da IA:** {answer}")
