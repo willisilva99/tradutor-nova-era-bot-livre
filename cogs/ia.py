@@ -5,7 +5,7 @@ import aiohttp
 import json
 
 # Carregar a chave da API DeepSeek
-DEEPSEEK_API_KEY = os.getenv("OPENAI_API_KEY")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")  # Corrigido para usar DEEPSEEK_API_KEY
 
 class IACog(commands.Cog):
     """Cog para respostas automáticas da IA quando a pergunta começar com '?'."""
