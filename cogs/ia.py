@@ -37,6 +37,9 @@ class IACog(commands.Cog):
                 # Se houver erro ao acessar a IA
                 await message.channel.send(f"❌ **Erro ao acessar a IA:** {e}")
 
-    # Config de carregamento do cog
+        # Certifique-se de que os comandos do bot ainda sejam processados
+        await self.bot.process_commands(message)
+
+# Config de carregamento do cog
 async def setup(bot):
     await bot.add_cog(IACog(bot))
