@@ -3,27 +3,22 @@ import asyncio
 import discord
 from discord.ext import commands
 from discord import app_commands
+from deep_translator import GoogleTranslator         # ⇢ sem API
 
-# ----------- Argos Translate (OFF‑LINE) -----------
-import argostranslate.translate as argos
-import argostranslate.package
-
-# carrega modelos instalados só uma vez
-argos.load_installed_packages()
-
-def _translate_sync(text: str, src: str, dst: str) -> str:
-    """Chamada síncrona para o Argos (roda fora do event‑loop)."""
-    return argos.translate(text, f"{src}->{dst}")
-
-async def translate_text(text: str, dst: str, src: str = "auto") -> str | None:
-    """Traduz sem bloquear o bot."""
+# ---------- tradução assíncrona ----------
+async def translate_text(text: str, dest: str) -> str | None:
+    """Traduz sem bloquear o event‑loop usando deep‑translator."""
     loop = asyncio.get_running_loop()
+
+    def _sync():
+        return GoogleTranslator(source="auto", target=dest).translate(text)
+
     try:
-        return await loop.run_in_executor(None, _translate_sync, text, src, dst)
+        return await loop.run_in_executor(None, _sync)
     except Exception as e:
         print(f"[translate] erro: {e}")
         return None
-# --------------------------------------------------
+# -----------------------------------------
 
 
 # ============== COMPONENTES UI ====================
@@ -148,3 +143,4 @@ class UtilityCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(UtilityCog(bot))
+
