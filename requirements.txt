@@ -8,3 +8,4 @@ rcon
 PyNaCl
 openai>=1.14.3
 python-dotenv>=1.0.1
+deep-translator==1.11.4
