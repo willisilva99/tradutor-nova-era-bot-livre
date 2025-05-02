@@ -1,8 +1,7 @@
-# cogs/utility_cog.py
 import asyncio, datetime, discord
 from discord.ext import commands
 from discord import app_commands
-from deep_translator import GoogleTranslator
+from deep_translator import GoogleTranslator, exceptions as dt_exceptions
 
 
 # -------- tradução assíncrona ----------
@@ -14,30 +13,30 @@ async def translate_text(text: str, dest: str) -> str | None:
 
     try:
         return await loop.run_in_executor(None, _sync)
+    except (dt_exceptions.NotValidPayload, dt_exceptions.NotValidLength,
+            dt_exceptions.LanguageNotSupportedException) as e:
+        print(f"[translate] idioma não suportado: {e}")
     except Exception as e:
-        print(f"[translate] erro: {e}")
-        return None
+        print(f"[translate] erro geral: {e}")
+    return None
 # ---------------------------------------
 
 
-# -------- idiomas & UI ------------------
+# -------- idiomas & UI (garantidos) -----
 _LANGS = {
     "🇧🇷": ("pt", "Português"),
     "🇺🇸": ("en", "Inglês"),
     "🇪🇸": ("es", "Espanhol"),
     "🇫🇷": ("fr", "Francês"),
-    "🇵🇾": ("es", "Espanhol (PY)"),
-    "🟢":  ("gn", "Guarani"),
+    "🇵🇾": ("es", "Espanhol‑PY"),   # usa same code ‘es’
 }
 
 class LanguageSelect(discord.ui.Select):
     def __init__(self):
         super().__init__(
             placeholder="Escolha o idioma destino…",
-            options=[
-                discord.SelectOption(label=n, value=c, emoji=e)
-                for e, (c, n) in _LANGS.items()
-            ])
+            options=[discord.SelectOption(label=n, value=c, emoji=e)
+                     for e, (c, n) in _LANGS.items()])
 
     async def callback(self, interaction: discord.Interaction):
         self.view.selected = self.values[0]
@@ -89,7 +88,7 @@ class UtilityCog(commands.Cog):
         await prompt.edit(embed=self._e_result(lang, alvo, traduzido), view=None)
 
     # ---------- !traduzir ----------
-    @commands.command(help="!traduzir [texto|ID]  ou responda a mensagem.")
+    @commands.command(help="!traduzir [texto|ID] ou responda a mensagem.")
     async def traduzir(self, ctx: commands.Context, *, arg: str | None = None):
         alvo = await self._resolver_alvo(ctx.channel, arg, ctx.message)
         if not alvo:
@@ -117,7 +116,7 @@ class UtilityCog(commands.Cog):
         await status.edit(embed=self._e_result(lang, alvo, traduzido))
 
     # ---------- ping ----------
-    @app_commands.command(name="ping", description="Mostra latência")
+    @app_commands.command(name="ping", description="Latência do bot")
     async def ping_slash(self, itx: discord.Interaction):
         await itx.response.send_message(f"🏓 {round(self.bot.latency*1000)} ms")
 
@@ -126,9 +125,15 @@ class UtilityCog(commands.Cog):
         await ctx.send(f"🏓 {round(self.bot.latency*1000)} ms")
 
     # ---------- Embeds util ----------
+    def _footer(self):
+        hora = datetime.datetime.now(datetime.timezone.utc) \
+                   .astimezone(datetime.timezone(datetime.timedelta(hours=-3))) \
+                   .strftime("%H:%M")
+        return f"Anarquia Z • {hora}"
+
     def _e_base(self, title: str, desc: str | None = None, color=0xF44336):
         e = discord.Embed(title=title, description=desc, colour=color)
-        e.set_footer(text="WL Designer • deep-translator")
+        e.set_footer(text=self._footer())
         e.timestamp = datetime.datetime.utcnow()
         return e
 
