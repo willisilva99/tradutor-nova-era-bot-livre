@@ -1,11 +1,10 @@
 discord.py==2.2.3
-yt-dlp==2023.3.4
-googletrans
-SQLAlchemy==2.0.0
-psycopg2-binary==2.9.6
-aiohttp
-rcon
-PyNaCl
-openai>=1.14.3
-python-dotenv>=1.0.1
-deep-translator==1.11.4
+deep-translator==1.11.4    
+# demais pacotes do seu bot
+yt-dlp==2024.4.9
+SQLAlchemy==2.0.29
+psycopg2-binary==2.9.9
+aiohttp==3.9.5
+rcon==2.4.9
+PyNaCl==1.5.0
+python-dotenv==1.1.0
