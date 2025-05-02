@@ -1,34 +1,47 @@
-import asyncio, datetime, discord
+# cogs/utility_cog.py
+import asyncio, datetime, discord, os
 from discord.ext import commands
 from discord import app_commands
-from deep_translator import GoogleTranslator, exceptions as dt_exceptions
+from deep_translator import (GoogleTranslator, MyMemoryTranslator,
+                             exceptions as dt_exceptions)
 
 
-# -------- tradução assíncrona ----------
+# ---------- tradução assíncrona ----------
 async def translate_text(text: str, dest: str) -> str | None:
+    """Tenta Google; se 429/bloqueio, cai para MyMemory."""
     loop = asyncio.get_running_loop()
 
-    def _sync():
+    def _google():
         return GoogleTranslator(source="auto", target=dest).translate(text)
 
+    def _memory():
+        return MyMemoryTranslator(source="auto", target=dest).translate(text)
+
     try:
-        return await loop.run_in_executor(None, _sync)
-    except (dt_exceptions.NotValidPayload, dt_exceptions.NotValidLength,
-            dt_exceptions.LanguageNotSupportedException) as e:
-        print(f"[translate] idioma não suportado: {e}")
+        return await loop.run_in_executor(None, _google)
+    except (dt_exceptions.TooManyRequests, dt_exceptions.RequestError,
+            ConnectionError) as e:
+        print("[translate] Google bloqueado, fallback MyMemory →", e)
+    except dt_exceptions.LanguageNotSupportedException as e:
+        print("[translate] idioma não suportado:", e)
+        return None
+
+    # fallback
+    try:
+        return await loop.run_in_executor(None, _memory)
     except Exception as e:
-        print(f"[translate] erro geral: {e}")
-    return None
-# ---------------------------------------
+        print("[translate] MyMemory falhou:", e)
+        return None
+# -----------------------------------------
 
 
-# -------- idiomas & UI (garantidos) -----
+# ---------- idiomas & UI ------------------
 _LANGS = {
     "🇧🇷": ("pt", "Português"),
     "🇺🇸": ("en", "Inglês"),
     "🇪🇸": ("es", "Espanhol"),
     "🇫🇷": ("fr", "Francês"),
-    "🇵🇾": ("es", "Espanhol‑PY"),   # usa same code ‘es’
+    "🇵🇾": ("es", "Espanhol‑PY"),
 }
 
 class LanguageSelect(discord.ui.Select):
@@ -48,22 +61,19 @@ class LanguageSelectView(discord.ui.View):
         super().__init__(timeout=30)
         self.selected = None
         self.add_item(LanguageSelect())
-# ----------------------------------------
+# ------------------------------------------
 
 
 class UtilityCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # ---------- /traduzir ----------
-    @app_commands.command(
-        name="traduzir",
-        description="Traduza texto, uma mensagem (ID) ou reply."
-    )
+    # ------ /traduzir ------
+    @app_commands.command(name="traduzir",
+                          description="Traduza texto, ID ou reply.")
     async def traduzir_slash(self, itx: discord.Interaction,
                              mensagem: str | None = None):
         await itx.response.defer(thinking=True)
-
         alvo = await self._resolver_alvo(itx.channel, mensagem, itx.message)
         if not alvo:
             await itx.followup.send(embed=self._e_alerta(
@@ -87,26 +97,26 @@ class UtilityCog(commands.Cog):
 
         await prompt.edit(embed=self._e_result(lang, alvo, traduzido), view=None)
 
-    # ---------- !traduzir ----------
-    @commands.command(help="!traduzir [texto|ID] ou responda a mensagem.")
+    # ------ !traduzir ------
+    @commands.command(help="!traduzir [texto|ID] ou reply")
     async def traduzir(self, ctx: commands.Context, *, arg: str | None = None):
         alvo = await self._resolver_alvo(ctx.channel, arg, ctx.message)
         if not alvo:
             await ctx.send(embed=self._e_alerta(
-                "Envie `!traduzir texto`, `!traduzir ID` ou responda a uma mensagem."))
+                "Envie `!traduzir texto`, `!traduzir ID` ou responda."))
             return
 
-        msg_menu = await ctx.send(embed=self._e_base(
+        menu = await ctx.send(embed=self._e_base(
             "🌎 Reaja para escolher idioma",
             "\n".join(f"{e} → {n}" for e, (_, n) in _LANGS.items())))
-        for e in _LANGS: await msg_menu.add_reaction(e)
+        for e in _LANGS: await menu.add_reaction(e)
 
-        def chk(r, u): return u == ctx.author and r.message.id == msg_menu.id and str(r.emoji) in _LANGS
+        def chk(r, u): return u == ctx.author and r.message.id == menu.id and str(r.emoji) in _LANGS
         try:
             reaction, _ = await self.bot.wait_for("reaction_add", timeout=30, check=chk)
         except asyncio.TimeoutError:
-            await msg_menu.edit(embed=self._e_alerta("⏳ Tempo esgotado.")); return
-        await msg_menu.delete()
+            await menu.edit(embed=self._e_alerta("⏳ Tempo esgotado.")); return
+        await menu.delete()
 
         lang = _LANGS[str(reaction.emoji)][0]
         status = await ctx.send(embed=self._e_base("🔄 Traduzindo…"))
@@ -115,8 +125,8 @@ class UtilityCog(commands.Cog):
             await status.edit(embed=self._e_alerta("❌ Erro na tradução.")); return
         await status.edit(embed=self._e_result(lang, alvo, traduzido))
 
-    # ---------- ping ----------
-    @app_commands.command(name="ping", description="Latência do bot")
+    # ------ ping ------
+    @app_commands.command(name="ping", description="Latência")
     async def ping_slash(self, itx: discord.Interaction):
         await itx.response.send_message(f"🏓 {round(self.bot.latency*1000)} ms")
 
@@ -124,11 +134,11 @@ class UtilityCog(commands.Cog):
     async def ping_prefix(self, ctx: commands.Context):
         await ctx.send(f"🏓 {round(self.bot.latency*1000)} ms")
 
-    # ---------- Embeds util ----------
+    # ------ embeds util ------
     def _footer(self):
-        hora = datetime.datetime.now(datetime.timezone.utc) \
-                   .astimezone(datetime.timezone(datetime.timedelta(hours=-3))) \
-                   .strftime("%H:%M")
+        hora = datetime.datetime.utcnow() \
+               .astimezone(datetime.timezone(datetime.timedelta(hours=-3))) \
+               .strftime("%H:%M")
         return f"Anarquia Z • {hora}"
 
     def _e_base(self, title: str, desc: str | None = None, color=0xF44336):
@@ -149,7 +159,7 @@ class UtilityCog(commands.Cog):
         e.add_field(name="Traduzido", value=traduzido, inline=False)
         return e
 
-    # ---------- helpers ----------
+    # ------ helpers ------
     async def _resolver_alvo(self, canal, conteudo, ref_msg):
         if ref_msg and ref_msg.reference:
             try:
