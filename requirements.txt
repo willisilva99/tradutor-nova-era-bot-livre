@@ -1,6 +1,6 @@
 discord.py==2.2.3
+googletrans==4.0.0rc1      
 yt-dlp==2023.3.4
-googletrans
 SQLAlchemy==2.0.0
 psycopg2-binary==2.9.6
 aiohttp
