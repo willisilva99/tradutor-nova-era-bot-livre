@@ -1,12 +1,10 @@
 discord.py==2.2.3
-googletrans==4.0.0rc1      
 yt-dlp==2023.3.4
+googletrans
 SQLAlchemy==2.0.0
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.6
 aiohttp
 rcon
 PyNaCl
 openai>=1.14.3
 python-dotenv>=1.0.1
-deep-translator==1.11.4
-Cython>=3.0
