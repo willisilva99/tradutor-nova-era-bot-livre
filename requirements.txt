@@ -1,6 +1,5 @@
 discord.py==2.2.3
 deep-translator==1.11.4    
-# demais pacotes do seu bot
 yt-dlp==2024.4.9
 SQLAlchemy==2.0.29
 psycopg2-binary==2.9.9
