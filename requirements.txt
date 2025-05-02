@@ -2,7 +2,7 @@ discord.py==2.2.3
 googletrans==4.0.0rc1      
 yt-dlp==2023.3.4
 SQLAlchemy==2.0.0
-psycopg2-binary==2.9.6
+psycopg2-binary==2.9.9
 aiohttp
 rcon
 PyNaCl
