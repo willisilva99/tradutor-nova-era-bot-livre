@@ -8,5 +8,5 @@ rcon
 PyNaCl
 openai>=1.14.3
 python-dotenv>=1.0.1
-argos-translate==1.8.0
+argos-translate==
 Cython>=3.0
