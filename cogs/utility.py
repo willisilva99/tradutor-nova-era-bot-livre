@@ -1,61 +1,37 @@
 # cogs/utility_cog.py
-import asyncio, datetime, functools, discord
+import asyncio
+import discord
 from discord.ext import commands
 from discord import app_commands
-from deep_translator import (GoogleTranslator, MyMemoryTranslator,
-                             exceptions as dt_exc)
+from deep_translator import GoogleTranslator
 
 
-# ----------- tradução assíncrona -----------
-TIMEOUT = 8  # segundos máximos por tentativa
-
+# ---------- tradução assíncrona ----------
 async def translate_text(text: str, dest: str) -> str | None:
-    """Google com timeout; se travar ou bloquear, cai p/ MyMemory."""
     loop = asyncio.get_running_loop()
 
-    async def _run(func):
-        return await loop.run_in_executor(None, func)
+    def _sync():
+        return GoogleTranslator(source="auto", target=dest).translate(text)
 
-    # 1) Google
     try:
-        google_fn = functools.partial(
-            GoogleTranslator(source="auto", target=dest).translate,
-            text
-        )
-        return await asyncio.wait_for(_run(google_fn), timeout=TIMEOUT)
-    except (dt_exc.TooManyRequests, dt_exc.RequestError,
-            dt_exc.LanguageNotSupportedException,
-            asyncio.TimeoutError, ConnectionError) as e:
-        print("[translate] Google falhou →", type(e).__name__, e)
-
-    # 2) MyMemory
-    try:
-        mem_fn = functools.partial(
-            MyMemoryTranslator(source="auto", target=dest).translate,
-            text
-        )
-        return await asyncio.wait_for(_run(mem_fn), timeout=TIMEOUT)
+        return await loop.run_in_executor(None, _sync)
     except Exception as e:
-        print("[translate] MyMemory falhou →", type(e).__name__, e)
+        print(f"[translate] erro: {e}")
         return None
-# -------------------------------------------
+# -----------------------------------------
 
 
-# ------------- Idiomas + UI -----------------
-_LANGS = {
-    "🇧🇷": ("pt", "Português"),
-    "🇺🇸": ("en", "Inglês"),
-    "🇪🇸": ("es", "Espanhol"),
-    "🇫🇷": ("fr", "Francês"),
-    "🇵🇾": ("es", "Espanhol‑PY"),
-}
-
+# ---------- UI (Select / Reactions) ------
 class LanguageSelect(discord.ui.Select):
+    OPTIONS = [
+        discord.SelectOption(label="Português", value="pt", emoji="🇧🇷"),
+        discord.SelectOption(label="Inglês",     value="en", emoji="🇺🇸"),
+        discord.SelectOption(label="Espanhol",   value="es", emoji="🇪🇸")
+    ]
     def __init__(self):
-        super().__init__(
-            placeholder="Escolha o idioma destino…",
-            options=[discord.SelectOption(label=n, value=c, emoji=e)
-                     for e, (c, n) in _LANGS.items()])
+        super().__init__(placeholder="Escolha o idioma…", min_values=1,
+                         max_values=1, options=self.OPTIONS)
+
     async def callback(self, interaction: discord.Interaction):
         self.view.selected = self.values[0]
         await interaction.response.defer()
@@ -64,9 +40,9 @@ class LanguageSelect(discord.ui.Select):
 class LanguageSelectView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=30)
-        self.selected = None
+        self.selected: str | None = None
         self.add_item(LanguageSelect())
-# -------------------------------------------
+# -----------------------------------------
 
 
 class UtilityCog(commands.Cog):
@@ -75,110 +51,120 @@ class UtilityCog(commands.Cog):
         self.bot = bot
 
     # ---------- /traduzir ----------
-    @app_commands.command(name="traduzir",
-                          description="Traduza texto, ID ou reply.")
-    async def traduzir_slash(self, itx: discord.Interaction,
-                             mensagem: str | None = None):
-        await itx.response.defer(thinking=True)
+    @app_commands.command(
+        name="traduzir",
+        description="Traduza uma mensagem (ID, reply) ou texto direto."
+    )
+    @app_commands.describe(mensagem="ID da mensagem ou texto a traduzir")
+    async def traduzir_slash(
+        self,
+        itx: discord.Interaction,
+        mensagem: str | None = None
+    ):
+        await itx.response.defer(thinking=True)  # público
         alvo = await self._resolver_alvo(itx.channel, mensagem, itx.message)
+
         if not alvo:
-            await itx.followup.send(embed=self._e_alerta(
-                "Forneça texto, ID ou responda a uma mensagem."))
+            await itx.followup.send(
+                "⚠️ Forneça texto, ID ou responda a uma mensagem."
+            )
             return
 
         view = LanguageSelectView()
-        prompt = await itx.followup.send(embed=self._e_base(
-            "🌎 Selecione o idioma destino"), view=view)
+        prompt = await itx.followup.send(
+            embed=discord.Embed(
+                title="🌎 Escolha o idioma destino",
+                color=discord.Color.blue()
+            ),
+            view=view
+        )
 
         await view.wait()
         lang = view.selected
         if not lang:
-            await prompt.edit(embed=self._e_alerta("⏳ Tempo esgotado."), view=None)
+            await prompt.edit(content="⏳ Tempo esgotado.", embed=None, view=None)
             return
 
         traduzido = await translate_text(alvo, lang)
         if not traduzido:
-            await prompt.edit(embed=self._e_alerta("❌ Erro na tradução."), view=None)
+            await prompt.edit(content="❌ Erro na tradução.", embed=None, view=None)
             return
 
-        await prompt.edit(embed=self._e_result(lang, alvo, traduzido), view=None)
+        await prompt.edit(
+            embed=discord.Embed(
+                title="Tradução",
+                description=f"**Idioma:** `{lang}`\n\n{traduzido}",
+                color=discord.Color.green()
+            ),
+            view=None
+        )
 
     # ---------- !traduzir ----------
-    @commands.command(name="traduzir",
-                      help="!traduzir [texto|ID] ou responda mensagem.")
+    @commands.command(
+        name="traduzir",
+        help="!traduzir [texto ou ID]  |  responda a mensagem para traduzir."
+    )
     async def traduzir_prefix(self, ctx: commands.Context, *, arg: str | None = None):
         alvo = await self._resolver_alvo(ctx.channel, arg, ctx.message)
+
         if not alvo:
-            await ctx.send(embed=self._e_alerta(
-                "Envie `!traduzir texto`, `!traduzir ID` ou responda."))
+            await ctx.send(
+                "⚠️ Envie `!traduzir texto`, `!traduzir <ID>` ou responda a uma mensagem."
+            )
             return
 
-        menu = await ctx.send(embed=self._e_base(
-            "🌎 Reaja para escolher idioma",
-            "\n".join(f"{e} → {n}" for e, (_, n) in _LANGS.items())))
-        for e in _LANGS: await menu.add_reaction(e)
+        langs = {"🇧🇷": "pt", "🇺🇸": "en", "🇪🇸": "es"}
+        msg_menu = await ctx.send(
+            embed=discord.Embed(
+                title="🌎 Reaja para escolher idioma",
+                description="\n".join(f"{e} → {c}" for e, c in langs.items()),
+                color=discord.Color.blue()
+            )
+        )
+        for e in langs: await msg_menu.add_reaction(e)
 
-        def chk(r, u): return u == ctx.author and r.message.id == menu.id and str(r.emoji) in _LANGS
+        def chk(r, u): return (
+            u == ctx.author and str(r.emoji) in langs and r.message.id == msg_menu.id
+        )
         try:
             reaction, _ = await self.bot.wait_for("reaction_add", timeout=30, check=chk)
         except asyncio.TimeoutError:
-            await menu.edit(embed=self._e_alerta("⏳ Tempo esgotado.")); return
-        await menu.delete()
+            await ctx.send("⏳ Tempo esgotado."); return
+        await msg_menu.delete()
 
-        lang = _LANGS[str(reaction.emoji)][0]
-        status = await ctx.send(embed=self._e_base("🔄 Traduzindo…"))
+        lang = langs[str(reaction.emoji)]
+        status = await ctx.send("🔄 Traduzindo…")
         traduzido = await translate_text(alvo, lang)
         if not traduzido:
-            await status.edit(embed=self._e_alerta("❌ Erro na tradução.")); return
-        await status.edit(embed=self._e_result(lang, alvo, traduzido))
+            await status.edit(content="❌ Erro na tradução."); return
+        await status.edit(content=f"✅ **({lang})** {traduzido}")
 
     # ---------- ping ----------
-    @app_commands.command(name="ping", description="Latência")
+    @app_commands.command(name="ping", description="Latência do bot")
     async def ping_slash(self, itx: discord.Interaction):
         await itx.response.send_message(f"🏓 {round(self.bot.latency*1000)} ms")
 
-    @commands.command(name="ping")
+    @commands.command(name="ping", help="Latência do bot")
     async def ping_prefix(self, ctx: commands.Context):
         await ctx.send(f"🏓 {round(self.bot.latency*1000)} ms")
 
-    # ---------- Embeds util ----------
-    def _footer(self) -> str:
-        hora = datetime.datetime.utcnow() \
-               .astimezone(datetime.timezone(datetime.timedelta(hours=-3))) \
-               .strftime("%H:%M")
-        return f"Anarquia Z • {hora}"
-
-    def _e_base(self, title: str, desc: str | None = None, color=0xF44336):
-        e = discord.Embed(title=title, description=desc, colour=color)
-        e.set_footer(text=self._footer())
-        e.timestamp = datetime.datetime.utcnow()
-        return e
-
-    def _e_alerta(self, texto: str):
-        return self._e_base("Aviso", texto, 0xFFC107)
-
-    def _e_result(self, lang: str, original: str, traduzido: str):
-        nome = next(n for _, (c, n) in _LANGS.items() if c == lang)
-        e = self._e_base("✅ Tradução concluída", colour=0x4CAF50)
-        e.add_field(name="Idioma destino", value=f"`{lang}` • {nome}", inline=False)
-        e.add_field(name="Original", value=discord.utils.escape_markdown(original),
-                    inline=False)
-        e.add_field(name="Traduzido", value=traduzido, inline=False)
-        return e
-
     # ---------- helpers ----------
     async def _resolver_alvo(self, canal, conteudo, ref_msg):
-        if ref_msg and ref_msg.reference:
+        """Retorna texto para traduzir."""
+        # se reply
+        if ref_msg and ref_msg.reference and ref_msg.reference.message_id:
             try:
                 msg = await canal.fetch_message(ref_msg.reference.message_id)
                 return msg.content
             except: pass
+        # se ID numérico
         if conteudo and conteudo.isdigit():
             try:
                 msg = await canal.fetch_message(conteudo)
                 return msg.content
             except: pass
-        return conteudo or None
+        # texto direto
+        return conteudo if conteudo else None
 
 
 async def setup(bot: commands.Bot):
