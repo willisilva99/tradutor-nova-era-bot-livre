@@ -1,13 +1,10 @@
-# cogs/utility_cog.py
-import asyncio
-import discord
+import asyncio, discord
 from discord.ext import commands
 from discord import app_commands
-from deep_translator import GoogleTranslator         # ⇢ sem API
+from deep_translator import GoogleTranslator
 
 # ---------- tradução assíncrona ----------
 async def translate_text(text: str, dest: str) -> str | None:
-    """Traduz sem bloquear o event‑loop usando deep‑translator."""
     loop = asyncio.get_running_loop()
 
     def _sync():
@@ -20,8 +17,7 @@ async def translate_text(text: str, dest: str) -> str | None:
         return None
 # -----------------------------------------
 
-
-# ============== COMPONENTES UI ====================
+# ---------- UI (Select / Reactions) ------
 class LanguageSelect(discord.ui.Select):
     OPTIONS = [
         discord.SelectOption(label="Português", value="pt", emoji="🇧🇷"),
@@ -29,9 +25,8 @@ class LanguageSelect(discord.ui.Select):
         discord.SelectOption(label="Espanhol",   value="es", emoji="🇪🇸")
     ]
     def __init__(self):
-        super().__init__(placeholder="Escolha o idioma…",
-                         min_values=1, max_values=1,
-                         options=self.OPTIONS)
+        super().__init__(placeholder="Escolha o idioma…", min_values=1,
+                         max_values=1, options=self.OPTIONS)
 
     async def callback(self, interaction: discord.Interaction):
         self.view.selected = self.values[0]
@@ -43,19 +38,16 @@ class LanguageSelectView(discord.ui.View):
         super().__init__(timeout=30)
         self.selected: str | None = None
         self.add_item(LanguageSelect())
-# ==================================================
-
+# -----------------------------------------
 
 class UtilityCog(commands.Cog):
-    """/traduzir  •  $traduzir  •  /ping  •  $ping"""
+    """/traduzir · !traduzir · /ping · !ping"""
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # ------------- /traduzir ---------------
-    @app_commands.command(
-        name="traduzir",
-        description="Traduza uma mensagem pelo ID ou responda à mensagem."
-    )
+    # ------ /traduzir ------
+    @app_commands.command(name="traduzir",
+        description="Traduza uma mensagem pelo ID ou respondendo à mensagem.")
     @app_commands.describe(mensagem="ID da mensagem (opcional)")
     async def traduzir_slash(self, itx: discord.Interaction,
                              mensagem: str | None = None):
@@ -63,13 +55,12 @@ class UtilityCog(commands.Cog):
         alvo = await self._pegar_mensagem(itx.channel, mensagem, itx.message)
         if not alvo:
             await itx.followup.send("⚠️ Informe o ID ou responda a uma mensagem!",
-                                    ephemeral=True)
-            return
+                                    ephemeral=True); return
 
         view = LanguageSelectView()
-        prompt = await itx.followup.send(embed=discord.Embed(
-            title="🌎 Escolha o idioma destino",
-            color=discord.Color.blue()),
+        prompt = await itx.followup.send(
+            embed=discord.Embed(title="🌎 Escolha o idioma destino",
+                                color=discord.Color.blue()),
             view=view, ephemeral=True)
 
         await view.wait()
@@ -89,9 +80,9 @@ class UtilityCog(commands.Cog):
             color=discord.Color.green()),
             view=None)
 
-    # ------------- $traduzir ---------------
+    # ------ !traduzir ------
     @commands.command(name="traduzir",
-                      help="Traduza via prefixo. Use ID ou responda.")
+                      help="Traduza via prefixo (!traduzir [ID] ou reply).")
     async def traduzir_prefix(self, ctx: commands.Context,
                               mensagem_id: str | None = None):
         alvo = await self._pegar_mensagem(ctx.channel, mensagem_id, ctx.message)
@@ -121,7 +112,7 @@ class UtilityCog(commands.Cog):
             await msg.edit(content="❌ Erro na tradução."); return
         await msg.edit(content=f"✅ **({lang})** {traduzido}")
 
-    # ------------- ping ---------------
+    # ------ ping ------
     @app_commands.command(name="ping", description="Latência do bot")
     async def ping_slash(self, itx: discord.Interaction):
         await itx.response.send_message(f"🏓 {round(self.bot.latency*1000)} ms")
@@ -130,7 +121,7 @@ class UtilityCog(commands.Cog):
     async def ping_prefix(self, ctx: commands.Context):
         await ctx.send(f"🏓 {round(self.bot.latency*1000)} ms")
 
-    # -------- helpers --------
+    # ------ helpers ------
     async def _pegar_mensagem(self, canal, msg_id, referencia):
         if msg_id:
             try: return await canal.fetch_message(msg_id)
@@ -143,4 +134,3 @@ class UtilityCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(UtilityCog(bot))
-
