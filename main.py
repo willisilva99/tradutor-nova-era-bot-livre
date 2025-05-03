@@ -86,8 +86,9 @@ async def load_cogs():
         "cogs.arcano",
         "cogs.nome",
          "cogs.temporario",
-        "cogs.ia"
-    
+        "cogs.ia",
+            "cogs.ranks"
+
     ]
     for cog in cogs:
         try:
