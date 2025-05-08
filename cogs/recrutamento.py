@@ -6,19 +6,10 @@ import logging
 
 from db import SessionLocal, GuildConfig
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("recrutamento")
+log.setLevel(logging.DEBUG)
 
 class RecrutamentoCog(commands.Cog):
-    """
-    Cog para processar recrutamento e procura de clã.
-    - /set_canal_recrutamento: define o canal onde o cog atua.
-    - Mensagens no formato:
-        NomeJogador, NomeClã, recrutando
-        NomeJogador, NomeClã, procurando
-      geram embeds com reações ✅ e ❌ e menção ao jogador.
-    - Qualquer outra mensagem no canal é apagada e exibe tutorial por 30s.
-    """
-
     CHECK_EMOJI  = "✅"
     CROSS_EMOJI  = "❌"
     TUTORIAL_TTL = 30  # segundos
@@ -26,21 +17,18 @@ class RecrutamentoCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # ----------------------------------------
-    # Comando de configuração de canal
-    # ----------------------------------------
+    # --- Slash para definir canal ---
     @app_commands.command(
         name="set_canal_recrutamento",
-        description="Define o canal onde o bot processará recrutamento e procura de clã."
+        description="Define o canal onde o bot processará recrutamento/procura"
     )
-    @app_commands.describe(canal="Mencione o canal ou informe o ID dele.")
+    @app_commands.describe(canal="Mencione o canal ou informe o ID dele")
     @app_commands.checks.has_permissions(administrator=True)
     async def set_canal_recrutamento(
         self,
         interaction: discord.Interaction,
         canal: discord.TextChannel
     ):
-        """Define o canal de recrutamento no banco de dados."""
         await interaction.response.defer(ephemeral=True)
         guild_id = str(interaction.guild_id)
         session = SessionLocal()
@@ -51,94 +39,76 @@ class RecrutamentoCog(commands.Cog):
                 session.add(cfg)
             cfg.recrutamento_channel_id = str(canal.id)
             session.commit()
-            await interaction.followup.send(
-                f"Canal de recrutamento definido para {canal.mention}.",
-                ephemeral=True
-            )
-            log.info(f"[Recrutamento] Set channel {canal.id} for guild {guild_id}")
-        except Exception as e:
-            session.rollback()
-            log.exception("Erro ao definir canal de recrutamento")
-            await interaction.followup.send(
-                f"❌ Não foi possível definir o canal: {e}",
-                ephemeral=True
-            )
+            await interaction.followup.send(f"✅ Canal de recrutamento: {canal.mention}", ephemeral=True)
+            log.info(f"Canal de recrutamento salvo: {canal.id} em guild {guild_id}")
+        except Exception:
+            log.exception("Erro ao salvar canal de recrutamento")
+            await interaction.followup.send("❌ Falha ao definir canal.", ephemeral=True)
         finally:
             session.close()
 
-    # ----------------------------------------
-    # Listener de mensagens
-    # ----------------------------------------
+    # --- Listener de mensagens ---
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # Ignora bots, DMs, e mensagens fora de guilda
+        # Debug: veja NO CONSOLE TODOA mensagem chegando
+        log.debug(f"on_message: #{message.channel} – {message.author}: {message.content!r}")
+
+        # Ignora bots/DMs
         if message.author.bot or not message.guild:
             return
 
-        # Carrega config do guild
+        # Busca config
         session = SessionLocal()
         cfg = session.query(GuildConfig).filter_by(guild_id=str(message.guild.id)).first()
         session.close()
 
-        # Se não tiver canal configurado ou mensagem em outro canal, sai
+        # Se não estiver no canal de recrutamento, ignora
         if not cfg or not cfg.recrutamento_channel_id:
+            log.debug("→ Sem canal configurado, ignora")
             return
         if str(message.channel.id) != cfg.recrutamento_channel_id:
+            log.debug(f"→ Canal {message.channel.id} != config {cfg.recrutamento_channel_id}")
             return
 
-        content = message.content.strip()
-        log.debug(f"[Recrutamento] Mensagem recebida: {content!r} de {message.author}")
-
-        parts = [p.strip() for p in content.split(',')]
-        valid_action = len(parts) == 3 and parts[2].lower() in ("recrutando", "procurando")
-
-        if valid_action:
-            # Processa recrutando/procurando
+        # Formato válido?
+        parts = [p.strip() for p in message.content.split(',')]
+        if len(parts) == 3 and parts[2].lower() in ("recrutando", "procurando"):
             nome_jogo, nome_clan, acao = parts
-            acao_lower = acao.lower()
-            titulo = "Recrutamento de Clã" if acao_lower == "recrutando" else "Procura de Clã"
-
+            log.debug("→ Formato válido, gerando embed")
+            titulo = "Recrutamento de Clã" if acao.lower()=="recrutando" else "Procura de Clã"
             embed = discord.Embed(title=titulo, color=discord.Color.blue())
-            embed.add_field(name="Jogador (Discord)", value=message.author.mention, inline=False)
-            embed.add_field(name="Nome no jogo",     value=nome_jogo,          inline=True)
-            embed.add_field(name="Clã",              value=nome_clan,          inline=True)
-            embed.add_field(name="Status",           value=acao.capitalize(),  inline=False)
-            embed.set_footer(text="Reaja ✅ ou ❌ para entrar em contato.")
+            embed.add_field("Jogador", message.author.mention, inline=False)
+            embed.add_field("Nome no jogo", nome_jogo, inline=True)
+            embed.add_field("Clã", nome_clan, inline=True)
+            embed.add_field("Status", acao.capitalize(), inline=False)
+            embed.set_footer(text="Reaja ✅ ou ❌")
 
-            # Deleta original e envia embed
             try:
                 await message.delete()
-            except discord.Forbidden:
-                log.warning("[Recrutamento] Permissão negada para deletar mensagem.")
-            except Exception as e:
-                log.exception("Erro ao deletar mensagem original")
-
-            novo_msg = await message.channel.send(embed=embed)
-            await novo_msg.add_reaction(self.CHECK_EMOJI)
-            await novo_msg.add_reaction(self.CROSS_EMOJI)
+            except:
+                log.warning("Não consegui deletar a mensagem original")
+            novo = await message.channel.send(embed=embed)
+            await novo.add_reaction(self.CHECK_EMOJI)
+            await novo.add_reaction(self.CROSS_EMOJI)
             return
 
         # Mensagem inválida: limpa e mostra tutorial
+        log.debug("→ Formato inválido, apagando e enviando tutorial")
         try:
             await message.delete()
         except:
             pass
 
         tutorial = discord.Embed(
-            title="Como usar Recrutamento/Procura de Clã",
+            title="Como usar Recrutamento/Procura",
             description=(
-                "Envie uma mensagem exatamente neste formato:\n\n"
                 "`NomeJogador, NomeClã, recrutando`\n"
                 "ou\n"
-                "`NomeJogador, NomeClã, procurando`\n\n"
-                "Exemplo:\n"
-                "`Fulano123, OrdemDosHeróis, recrutando`"
+                "`NomeJogador, NomeClã, procurando`"
             ),
             color=discord.Color.gold()
         )
         tutorial_msg = await message.channel.send(embed=tutorial)
-
-        # Apaga tutorial após TUTORIAL_TTL segundos
         await asyncio.sleep(self.TUTORIAL_TTL)
         try:
             await tutorial_msg.delete()
@@ -146,7 +116,7 @@ class RecrutamentoCog(commands.Cog):
             pass
 
     async def cog_load(self):
-        log.info("RecrutamentoCog carregado.")
+        log.info("RecrutamentoCog carregado")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(RecrutamentoCog(bot))
