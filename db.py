@@ -68,13 +68,31 @@ class PlayerName(Base):
 class GuildConfig(Base):
     __tablename__ = "guild_config"
 
-    id = Column(Integer, primary_key=True, index=True)
-    guild_id = Column(String, unique=True, index=True, nullable=False)
-    verification_channel_id = Column(String, nullable=True)
-    log_channel_id          = Column(String, nullable=True)
-    staff_role_id           = Column(String, nullable=True)
-    verificado_role_id      = Column(String, nullable=True)
-    # Se quiser mais campos (wait_time, etc.), adicione aqui.
+    id                       = Column(Integer, primary_key=True, index=True)
+    guild_id                 = Column(String, unique=True, index=True, nullable=False)
+    verification_channel_id  = Column(String, nullable=True)
+    log_channel_id           = Column(String, nullable=True)
+    staff_role_id            = Column(String, nullable=True)
+    verificado_role_id       = Column(String, nullable=True)
+    recrutamento_channel_id  = Column(String, nullable=True)
+
+# ---------------------------------------------------
+# Tabela RecruitmentEntry (nova) - para registrar postagens de recrutamento
+# ---------------------------------------------------
+class RecruitmentEntry(Base):
+    __tablename__ = "recruitment_entry"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    guild_id        = Column(String, nullable=False, index=True)
+    discord_user_id = Column(String, nullable=False)
+    game_name       = Column(String, nullable=False)
+    clan_name       = Column(String, nullable=False)
+    action          = Column(String, nullable=False)  # 'recrutando' ou 'procurando'
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_recruitment_guild_action", "guild_id", "action"),
+    )
 
 # ---------------------------------------------------
 # Tabela AI Cache (nova) para memórias da IA
