@@ -4,7 +4,7 @@ from discord import app_commands
 import asyncio
 import logging
 
-from db import SessionLocal, RecruitmentConfig, RecruitmentEntry
+from db import SessionLocal, GuildConfig, RecruitmentEntry
 
 log = logging.getLogger("recrutamento")
 log.setLevel(logging.INFO)
@@ -18,7 +18,6 @@ class RecrutamentoCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # Slash: define canal de recrutamento
     @app_commands.command(
         name="set_canal_recrutamento",
         description="Define o canal onde o bot processará recrutamento/procura de clã."
@@ -34,12 +33,11 @@ class RecrutamentoCog(commands.Cog):
         guild_id = str(interaction.guild_id)
         session = SessionLocal()
         try:
-            cfg = session.query(RecruitmentConfig).filter_by(guild_id=guild_id).first()
+            cfg = session.query(GuildConfig).filter_by(guild_id=guild_id).first()
             if not cfg:
-                cfg = RecruitmentConfig(guild_id=guild_id, channel_id=str(canal.id))
+                cfg = GuildConfig(guild_id=guild_id)
                 session.add(cfg)
-            else:
-                cfg.channel_id = str(canal.id)
+            cfg.recrutamento_channel_id = str(canal.id)
             session.commit()
             await interaction.followup.send(
                 f"✅ Canal de recrutamento definido para {canal.mention}.",
@@ -60,11 +58,14 @@ class RecrutamentoCog(commands.Cog):
         if message.author.bot or not message.guild:
             return
 
-        # obtém o canal configurado
+        # busca config no GuildConfig
         session = SessionLocal()
-        cfg = session.query(RecruitmentConfig).filter_by(guild_id=str(message.guild.id)).first()
+        cfg = session.query(GuildConfig).filter_by(guild_id=str(message.guild.id)).first()
         session.close()
-        if not cfg or str(message.channel.id) != cfg.channel_id:
+
+        if not cfg or not cfg.recrutamento_channel_id:
+            return
+        if str(message.channel.id) != cfg.recrutamento_channel_id:
             return
 
         parts = [p.strip() for p in message.content.split(',')]
@@ -72,7 +73,7 @@ class RecrutamentoCog(commands.Cog):
             nome_jogo, nome_clan, acao = parts
             acao_lower = acao.lower()
 
-            # monta embed
+            # cria embed
             titulo = "Recrutamento de Clã" if acao_lower == "recrutando" else "Procura de Clã"
             embed = discord.Embed(title=titulo, color=discord.Color.blue())
             embed.add_field("Jogador", message.author.mention, inline=False)
@@ -81,14 +82,16 @@ class RecrutamentoCog(commands.Cog):
             embed.add_field("Status", acao.capitalize(), inline=False)
             embed.set_footer(text="Reaja ✅ ou ❌ para entrar em contato.")
 
-            try: await message.delete()
-            except: pass
+            try:
+                await message.delete()
+            except:
+                pass
 
             novo = await message.channel.send(embed=embed)
             await novo.add_reaction(self.CHECK_EMOJI)
             await novo.add_reaction(self.CROSS_EMOJI)
 
-            # salva no banco
+            # registra no DB
             session = SessionLocal()
             try:
                 entry = RecruitmentEntry(
@@ -108,9 +111,11 @@ class RecrutamentoCog(commands.Cog):
                 session.close()
             return
 
-        # inválido: apaga e envia tutorial
-        try: await message.delete()
-        except: pass
+        # formato inválido: apaga e mostra tutorial
+        try:
+            await message.delete()
+        except:
+            pass
 
         tutorial = discord.Embed(
             title="Como usar Recrutamento/Procura",
@@ -123,8 +128,10 @@ class RecrutamentoCog(commands.Cog):
         )
         msg = await message.channel.send(embed=tutorial)
         await asyncio.sleep(self.TUTORIAL_TTL)
-        try: await msg.delete()
-        except: pass
+        try:
+            await msg.delete()
+        except:
+            pass
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(RecrutamentoCog(bot))
