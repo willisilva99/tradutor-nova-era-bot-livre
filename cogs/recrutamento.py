@@ -42,8 +42,7 @@ class RecruitmentCog(commands.Cog):
                 ephemeral=True
             )
 
-        guild_id = str(interaction.guild_id)
-        self.config[guild_id] = channel.id
+        self.config[str(interaction.guild_id)] = channel.id
         self.save_config()
 
         await interaction.response.send_message(
@@ -65,19 +64,19 @@ class RecruitmentCog(commands.Cog):
         match = PATTERN.match(content)
 
         if not match:
-            # formato inválido
+            # Mensagem inválida: apagar e mostrar tutorial
             try:
                 await message.delete()
             except discord.Forbidden:
                 pass
 
             embed = discord.Embed(
-                title="📢 Formato Inválido",
+                title="⚠️ Formato Inválido",
                 description=(
                     "Envie **exatamente** 3 linhas:\n"
-                    "1️⃣ Nome completo\n"
-                    "2️⃣ Clã/Guilda\n"
-                    "3️⃣ **recrutando** ou **procurando**\n\n"
+                    "① Nome completo\n"
+                    "② Clã/Guilda\n"
+                    "③ **recrutando** ou **procurando**\n\n"
                     "Exemplo:\n"
                     "`Will Doe`\n"
                     "`Anarquia Z`\n"
@@ -86,12 +85,13 @@ class RecruitmentCog(commands.Cog):
                 color=discord.Color.orange(),
                 timestamp=datetime.utcnow()
             )
+            embed.set_footer(text="Tutorial de Recrutamento • Será apagado em 30s")
 
             tip = await message.channel.send(embed=embed)
             asyncio.create_task(self._delete_after(tip, 30))
             return
 
-        # formato correto
+        # Formato correto: extrai dados
         name = match.group("name").strip()
         clan = match.group("clan").strip()
         status = match.group("status").lower()
@@ -101,12 +101,15 @@ class RecruitmentCog(commands.Cog):
         except discord.Forbidden:
             pass
 
+        # Monta o embed de recrutamento
+        color = discord.Color.green() if status == "recrutando" else discord.Color.blue()
         embed = discord.Embed(
             title="📢 Anúncio de Recrutamento",
-            color=discord.Color.green() if status == "recrutando" else discord.Color.blue(),
+            color=color,
             timestamp=datetime.utcnow()
         )
-        embed.add_field(name="👤 Nome", value=name, inline=False)
+        embed.set_author(name=message.author.display_name, icon_url=message.author.avatar.url if message.author.avatar else None)
+        embed.add_field(name="👤 Nome", value=f"{message.author.mention} — {name}", inline=False)
         embed.add_field(name="🏷️ Clã/Guilda", value=clan, inline=False)
         embed.add_field(
             name="📌 Status",
