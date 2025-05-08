@@ -1,109 +1,136 @@
-import os
-import asyncio
-import random
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
+from discord import app_commands
+import asyncio
 
-# Importe seu DB e a conexão do sevendays
-from db import SessionLocal, ServerConfig
-from cogs.sevendays import TelnetConnection, active_connections
+from db import SessionLocal, GuildConfig
 
-TOKEN = os.getenv("TOKEN")
+class RecrutamentoCog(commands.Cog):
+    """
+    Cog para processar recrutamento e procura de clã.
+    - Comando /set_canal_recrutamento para definir o canal
+    - Mensagens no formato:
+        NomeJogador, NomeClã, recrutando
+        NomeJogador, NomeClã, procurando
+      geram embeds com reações ✅ e ❌.
+    - Qualquer outra mensagem no canal é apagada e exibe tutorial por 30s.
+    """
 
-intents = discord.Intents.default()
-intents.messages = True
-intents.message_content = True
-intents.guilds = True
+    CHECK_EMOJI = "✅"
+    CROSS_EMOJI = "❌"
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
 
-STATUS_LIST = [
-    "traduzindo",
-    "matando zumbis",
-    "falando com Willi",
-    "nova era PvE"
-]
-
-@tasks.loop(minutes=5)
-async def change_status():
-    status = random.choice(STATUS_LIST)
-    await bot.change_presence(activity=discord.Game(name=status))
-    print(f"Status atualizado para: {status}")
-
-@bot.event
-async def on_ready():
-    if getattr(bot, "ready_flag", False):
-        return  # Se já rodou uma vez, não executa novamente
-
-    bot.ready_flag = True
-    print(f"✅ Bot conectado como {bot.user}")
-
-    # Sincroniza comandos de slash
-    await bot.tree.sync()
-    print("✅ Comandos de Slash sincronizados!")
-
-    if not change_status.is_running():
-        change_status.start()
-
-    # Restaura as conexões Telnet do DB
-    restore_telnet_connections()
-    print("Bot está pronto!")
-
-def restore_telnet_connections():
-    """Restaura conexões Telnet do banco de dados."""
-    with SessionLocal() as session:
-        configs = session.query(ServerConfig).all()
-        for cfg in configs:
-            try:
-                guild_id = cfg.guild_id
-                # Se já tiver conexão ativa para esse guild, encerra e recria
-                if guild_id in active_connections:
-                    active_connections[guild_id].stop()
-                    del active_connections[guild_id]
-
-                conn = TelnetConnection(
-                    guild_id=guild_id,
-                    ip=cfg.ip,
-                    port=cfg.port,
-                    password=cfg.password,
-                    channel_id=cfg.channel_id,
-                    bot=bot
-                )
-                active_connections[guild_id] = conn
-                conn.start()
-            except Exception as e:
-                print(f"❌ Erro ao restaurar Telnet para {guild_id}: {e}")
-    print("✅ Conexões Telnet restauradas a partir do DB.")
-
-async def load_cogs():
-    # Adicione aqui todos os cogs que quer carregar
-    cogs = [
-        "cogs.admin",
-        "cogs.utility",
-        "cogs.sevendays",
-        "cogs.serverstatus",
-        "cogs.ajuda_completa",
-        "cogs.arcano",
-        "cogs.nome",
-        "cogs.temporario",
-        "cogs.ia",
-        "cogs.ranks",
-        "cogs.recrutamento"
-
-    ]
-    for cog in cogs:
+    # ================================
+    # Slash command para configurar canal
+    # ================================
+    @app_commands.command(
+        name="set_canal_recrutamento",
+        description="Define o canal onde o bot processará recrutamento e procura de clã."
+    )
+    @app_commands.describe(canal="Mencione o canal ou informe o ID dele.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_canal_recrutamento(
+        self,
+        interaction: discord.Interaction,
+        canal: discord.TextChannel
+    ):
+        await interaction.response.defer(ephemeral=True)
+        guild_id = str(interaction.guild_id)
+        session = SessionLocal()
         try:
-            await bot.load_extension(cog)
-            print(f"✅ Cog carregado: {cog}")
+            cfg = session.query(GuildConfig).filter_by(guild_id=guild_id).first()
+            if not cfg:
+                cfg = GuildConfig(guild_id=guild_id)
+                session.add(cfg)
+            cfg.recrutamento_channel_id = str(canal.id)
+            session.commit()
+            await interaction.followup.send(
+                f"Canal de recrutamento definido para {canal.mention}.",
+                ephemeral=True
+            )
         except Exception as e:
-            print(f"❌ Erro ao carregar {cog}: {e}")
+            session.rollback()
+            await interaction.followup.send(f"Erro ao definir canal: {e}", ephemeral=True)
+        finally:
+            session.close()
 
-async def main():
-    await load_cogs()
-    if not TOKEN:
-        print("❌ ERRO: Variável de ambiente TOKEN não encontrada.")
-        return
-    await bot.start(TOKEN)
+    # ================================
+    # Listener on_message
+    # ================================
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        # Ignora bots, DMs, servidores sem config
+        if message.author.bot or not message.guild:
+            return
 
-if __name__ == "__main__":
-    asyncio.run(main())
+        session = SessionLocal()
+        cfg = session.query(GuildConfig).filter_by(guild_id=str(message.guild.id)).first()
+        session.close()
+        # Se canal não configurado ou mensagem em outro canal, ignora
+        if not cfg or not cfg.recrutamento_channel_id:
+            return
+        if str(message.channel.id) != cfg.recrutamento_channel_id:
+            return
+
+        content = message.content.strip()
+        parts = [p.strip() for p in content.split(',')]
+
+        # Caso formato válido: gera embed
+        if len(parts) == 3 and parts[2].lower() in ("recrutando", "procurando"):
+            nome_jogo, nome_clan, acao = parts
+            acao_lower = acao.lower()
+
+            titulo = "Recrutamento de Clã" if acao_lower == "recrutando" else "Procura de Clã"
+            embed = discord.Embed(title=titulo, color=discord.Color.blue())
+            embed.add_field(name="Jogador (Discord)", value=message.author.mention, inline=False)
+            embed.add_field(name="Nome no jogo",     value=nome_jogo,          inline=True)
+            embed.add_field(name="Clã",              value=nome_clan,          inline=True)
+            embed.add_field(name="Status",           value=acao.capitalize(),  inline=False)
+            embed.set_footer(text="Reaja ✅ ou ❌ para entrar em contato.")
+
+            # Apaga mensagem original
+            try:
+                await message.delete()
+            except:
+                pass
+
+            # Envia embed e adiciona reações
+            novo_msg = await message.channel.send(embed=embed)
+            await novo_msg.add_reaction(self.CHECK_EMOJI)
+            await novo_msg.add_reaction(self.CROSS_EMOJI)
+            return
+
+        # Qualquer outra mensagem: apagar e enviar tutorial
+        try:
+            await message.delete()
+        except:
+            pass
+
+        tutorial = discord.Embed(
+            title="Como usar Recrutamento/Procura de Clã",
+            description=(
+                "Envie uma mensagem neste formato:\n\n"
+                "`NomeJogador, NomeClã, recrutando`\n"
+                "ou\n"
+                "`NomeJogador, NomeClã, procurando`\n\n"
+                "Exemplo:\n"
+                "`Fulano123, OrdemDosHeróis, recrutando`"
+            ),
+            color=discord.Color.gold()
+        )
+        tutorial_msg = await message.channel.send(embed=tutorial)
+
+        # Desaparece após 30s
+        await asyncio.sleep(30)
+        try:
+            await tutorial_msg.delete()
+        except:
+            pass
+
+    async def cog_load(self):
+        print(f"{self.__class__.__name__} carregado.")
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(RecrutamentoCog(bot))
