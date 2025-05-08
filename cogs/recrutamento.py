@@ -1,137 +1,87 @@
+import json
+import os
+import re
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
-import asyncio
-import logging
+from datetime import datetime, timedelta
 
-from db import SessionLocal, GuildConfig, RecruitmentEntry
+CONFIG_PATH = "configs/recruitment_config.json"
+DATA_PATH = "configs/recruitment_data.json"
 
-log = logging.getLogger("recrutamento")
-log.setLevel(logging.INFO)
-log.addHandler(logging.StreamHandler())
+class RecruitmentCog(commands.Cog):
+    """Cog para gerenciar anúncios de recrutamento em canal configurado e filtrar mensagens."""
 
-class RecrutamentoCog(commands.Cog):
-    CHECK_EMOJI  = "✅"
-    CROSS_EMOJI  = "❌"
-    TUTORIAL_TTL = 30  # segundos
-
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot):
         self.bot = bot
+        os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+        os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
 
-    @app_commands.command(
-        name="set_canal_recrutamento",
-        description="Define o canal onde o bot processará recrutamento/procura de clã."
-    )
-    @app_commands.describe(canal="Mencione o canal ou informe o ID dele.")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def set_canal_recrutamento(
-        self,
-        interaction: discord.Interaction,
-        canal: discord.TextChannel
-    ):
-        await interaction.response.defer(ephemeral=True)
-        guild_id = str(interaction.guild_id)
-        session = SessionLocal()
-        try:
-            cfg = session.query(GuildConfig).filter_by(guild_id=guild_id).first()
-            if not cfg:
-                cfg = GuildConfig(guild_id=guild_id)
-                session.add(cfg)
-            cfg.recrutamento_channel_id = str(canal.id)
-            session.commit()
-            await interaction.followup.send(
-                f"✅ Canal de recrutamento definido para {canal.mention}.",
-                ephemeral=True
-            )
-            log.info(f"[Recrutamento] Canal salvo: {canal.id} (guild {guild_id})")
-        except Exception:
-            session.rollback()
-            log.exception("[Recrutamento] Erro ao salvar canal")
-            await interaction.followup.send("❌ Falha ao definir canal.", ephemeral=True)
-        finally:
-            session.close()
+        # Carrega canal de recrutamento por guild
+        if os.path.isfile(CONFIG_PATH):
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                self.config = json.load(f)
+        else:
+            self.config = {}
 
+        # Mensagens tutorial pendentes para apagar
+        self.tutorials = {}  # {channel_id: tutorial_msg_id}
+
+    def save_config(self):
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(self.config, f, ensure_ascii=False, indent=2)
+
+    # Comando para definir canal de recrutamento
+    @app_commands.command(name="set_recruit_channel", description="Define o canal de recrutamento.")
+    @app_commands.describe(channel="Canal onde recrutamentos serão permitidos")
+    async def set_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        if not interaction.user.guild_permissions.manage_guild:
+            return await interaction.response.send_message("❌ Você precisa da permissão Gerenciar Servidor.", ephemeral=True)
+
+        self.config[str(interaction.guild.id)] = channel.id
+        self.save_config()
+        await interaction.response.send_message(f"✅ Canal de recrutamento definido: {channel.mention}", ephemeral=True)
+
+    # Listener para filtrar mensagens
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        await self.bot.process_commands(message)
-
-        if message.author.bot or not message.guild:
+        if message.author.bot:
             return
 
-        # busca config no GuildConfig
-        session = SessionLocal()
-        cfg = session.query(GuildConfig).filter_by(guild_id=str(message.guild.id)).first()
-        session.close()
-
-        if not cfg or not cfg.recrutamento_channel_id:
-            return
-        if str(message.channel.id) != cfg.recrutamento_channel_id:
+        guild_id = str(message.guild.id) if message.guild else None
+        channel_id = self.config.get(guild_id)
+        if not channel_id or message.channel.id != channel_id:
             return
 
-        parts = [p.strip() for p in message.content.split(',')]
-        if len(parts) == 3 and parts[2].lower() in ("recrutando", "procurando"):
-            nome_jogo, nome_clan, acao = parts
-            acao_lower = acao.lower()
-
-            # cria embed
-            titulo = "Recrutamento de Clã" if acao_lower == "recrutando" else "Procura de Clã"
-            embed = discord.Embed(title=titulo, color=discord.Color.blue())
-            embed.add_field("Jogador", message.author.mention, inline=False)
-            embed.add_field("Nome no jogo", nome_jogo, inline=True)
-            embed.add_field("Clã", nome_clan, inline=True)
-            embed.add_field("Status", acao.capitalize(), inline=False)
-            embed.set_footer(text="Reaja ✅ ou ❌ para entrar em contato.")
-
+        # Padrão básico: precisa conter 'recrutando' ou 'buscando'
+        content = message.content.lower()
+        if not re.search(r"\b(recrutando|buscando)\b", content):
             try:
                 await message.delete()
-            except:
-                pass
+            except discord.Forbidden:
+                return
 
-            novo = await message.channel.send(embed=embed)
-            await novo.add_reaction(self.CHECK_EMOJI)
-            await novo.add_reaction(self.CROSS_EMOJI)
+            # envia tutorial e programa remoção
+            tutorial = ("📢 **Como recrutar ou buscar clã**
+"
+                        "Use o comando `/recruit`:
+"
+                        "• `/recruit recrutando <nome_clan> <descrição>` para oferecer vagas
+"
+                        "• `/recruit buscando <nome_clan> <descrição>` para procurar clã
+")
+            sent = await message.channel.send(tutorial)
+            # agenda apagar após 30 segundos
+            self.tutorials[message.channel.id] = sent.id
+            self.bot.loop.create_task(self._delete_after_delay(message.channel, sent.id, 30))
 
-            # registra no DB
-            session = SessionLocal()
-            try:
-                entry = RecruitmentEntry(
-                    guild_id=str(message.guild.id),
-                    discord_user_id=str(message.author.id),
-                    game_name=nome_jogo,
-                    clan_name=nome_clan,
-                    action=acao_lower
-                )
-                session.add(entry)
-                session.commit()
-                log.info(f"[Recrutamento] Entry salva: {entry.id}")
-            except:
-                session.rollback()
-                log.exception("[Recrutamento] Erro ao salvar entry")
-            finally:
-                session.close()
-            return
-
-        # formato inválido: apaga e mostra tutorial
+    async def _delete_after_delay(self, channel: discord.TextChannel, msg_id: int, seconds: int):
+        await discord.utils.sleep_until(datetime.utcnow() + timedelta(seconds=seconds))
         try:
-            await message.delete()
-        except:
-            pass
-
-        tutorial = discord.Embed(
-            title="Como usar Recrutamento/Procura",
-            description=(
-                "`NomeJogador, NomeClã, recrutando`\n"
-                "ou\n"
-                "`NomeJogador, NomeClã, procurando`"
-            ),
-            color=discord.Color.gold()
-        )
-        msg = await message.channel.send(embed=tutorial)
-        await asyncio.sleep(self.TUTORIAL_TTL)
-        try:
+            msg = await channel.fetch_message(msg_id)
             await msg.delete()
-        except:
+        except Exception:
             pass
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(RecrutamentoCog(bot))
+    await bot.add_cog(RecruitmentCog(bot))
