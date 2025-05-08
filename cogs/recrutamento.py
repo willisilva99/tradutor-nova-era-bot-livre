@@ -2,12 +2,12 @@ import json
 import os
 import re
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 from discord import app_commands
+import asyncio
 from datetime import datetime, timedelta
 
 CONFIG_PATH = "configs/recruitment_config.json"
-DATA_PATH = "configs/recruitment_data.json"
 
 class RecruitmentCog(commands.Cog):
     """Cog para gerenciar anúncios de recrutamento em canal configurado e filtrar mensagens."""
@@ -15,7 +15,6 @@ class RecruitmentCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-        os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
 
         # Carrega canal de recrutamento por guild
         if os.path.isfile(CONFIG_PATH):
@@ -23,9 +22,6 @@ class RecruitmentCog(commands.Cog):
                 self.config = json.load(f)
         else:
             self.config = {}
-
-        # Mensagens tutorial pendentes para apagar
-        self.tutorials = {}  # {channel_id: tutorial_msg_id}
 
     def save_config(self):
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -36,47 +32,54 @@ class RecruitmentCog(commands.Cog):
     @app_commands.describe(channel="Canal onde recrutamentos serão permitidos")
     async def set_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
         if not interaction.user.guild_permissions.manage_guild:
-            return await interaction.response.send_message("❌ Você precisa da permissão Gerenciar Servidor.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ Você precisa da permissão Gerenciar Servidor.",
+                ephemeral=True
+            )
 
         self.config[str(interaction.guild.id)] = channel.id
         self.save_config()
-        await interaction.response.send_message(f"✅ Canal de recrutamento definido: {channel.mention}", ephemeral=True)
+        await interaction.response.send_message(
+            f"✅ Canal de recrutamento definido: {channel.mention}",
+            ephemeral=True
+        )
 
     # Listener para filtrar mensagens
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author.bot:
+        # ignora mensagens de bots ou fora de guild
+        if message.author.bot or message.guild is None:
             return
 
-        guild_id = str(message.guild.id) if message.guild else None
+        guild_id = str(message.guild.id)
         channel_id = self.config.get(guild_id)
         if not channel_id or message.channel.id != channel_id:
             return
 
-        # Padrão básico: precisa conter 'recrutando' ou 'buscando'
+        # verifica se é recrutamento
         content = message.content.lower()
-        if not re.search(r"\b(recrutando|buscando)\b", content):
+        if not re.search(r"\b(recrutando|buscando)\b", content, flags=re.IGNORECASE):
             try:
                 await message.delete()
             except discord.Forbidden:
                 return
 
-            # envia tutorial e programa remoção
-            tutorial = ("📢 **Como recrutar ou buscar clã**
-"
-                        "Use o comando `/recruit`:
-"
-                        "• `/recruit recrutando <nome_clan> <descrição>` para oferecer vagas
-"
-                        "• `/recruit buscando <nome_clan> <descrição>` para procurar clã
-")
-            sent = await message.channel.send(tutorial)
+            tutorial_msg = (
+                "📢 **Como usar o canal de recrutamento**\n"
+                "Use o comando `/recruit` para criar anúncios:\n"
+                "• `/recruit recrutando <nome_clan> <descrição>` para oferecer vagas\n"
+                "• `/recruit buscando <nome_clan> <descrição>` para procurar clã\n"
+            )
+            sent = await message.channel.send(embed=discord.Embed(
+                title="Tutorial de Recrutamento",
+                description=tutorial_msg,
+                color=discord.Color.orange()
+            ))
             # agenda apagar após 30 segundos
-            self.tutorials[message.channel.id] = sent.id
-            self.bot.loop.create_task(self._delete_after_delay(message.channel, sent.id, 30))
+            asyncio.create_task(self._delete_after_delay(message.channel, sent.id, 30))
 
-    async def _delete_after_delay(self, channel: discord.TextChannel, msg_id: int, seconds: int):
-        await discord.utils.sleep_until(datetime.utcnow() + timedelta(seconds=seconds))
+    async def _delete_after_delay(self, channel: discord.TextChannel, msg_id: int, delay: int):
+        await asyncio.sleep(delay)
         try:
             msg = await channel.fetch_message(msg_id)
             await msg.delete()
