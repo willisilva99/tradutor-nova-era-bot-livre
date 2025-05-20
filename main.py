@@ -81,12 +81,11 @@ async def load_cogs():
         "cogs.admin",
         "cogs.utility",
         "cogs.sevendays",
-        "cogs.serverstatus",
+        "cogs.global_ban",
         "cogs.ajuda_completa",
         "cogs.arcano",
         "cogs.nome",
         "cogs.temporario",
-        "cogs.ia",
         "cogs.ranks",
         "cogs.recrutamento"
 
