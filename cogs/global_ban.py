@@ -12,7 +12,7 @@ from db import SessionLocal, GlobalBan, GuildConfig
 
 logger = logging.getLogger(__name__)
 
-# ───────────── Embed util ─────────────
+# ───────────────── Embed util ─────────────────
 class E:
     @staticmethod
     def _b(t, d, c):
@@ -21,10 +21,10 @@ class E:
             timestamp=datetime.now(timezone.utc)
         )
     ok   = staticmethod(lambda d, **k: E._b("✅ Sucesso", d, discord.Color.green()).set_footer(**k))
-    err  = staticmethod(lambda d, **k: E._b("❌ Erro",    d, discord.Color.red()).set_footer(**k))
-    info = staticmethod(lambda d, **k: E._b("ℹ️ Informação", d, discord.Color.blue()).set_footer(**k))
+    err  = staticmethod(lambda d, **k: E._b("❌ Erro",    d, discord.Color.red())  .set_footer(**k))
+    info = staticmethod(lambda d, **k: E._b("ℹ️ Informação", d, discord.Color.blue()) .set_footer(**k))
 
-# ───────────── DB helper ─────────────
+# ───────────────── DB helper ─────────────────
 @contextmanager
 def db():
     s = SessionLocal()
@@ -37,12 +37,12 @@ def db():
     finally:
         s.close()
 
-# ───────────── Owner check ─────────────
+# ───────────────── Owner check ─────────────────
 OWNER_ID = 470628393272999948
 def is_owner(inter: discord.Interaction) -> bool:
     return inter.user.id == OWNER_ID
 
-# ───────────── Global Ban Cog ─────────────
+# ───────────────── Global Ban Cog ─────────────────
 class GlobalBanCog(commands.Cog):
     TRUSTED_IDS = {OWNER_ID}
     RATE_LIMIT  = 30
@@ -54,7 +54,6 @@ class GlobalBanCog(commands.Cog):
         self.log_channels: dict[int, Optional[int]] = {}
         self.ban_cache: set[int] = set()
 
-        # grupo /gban (registrado depois)
         self.gban = app_commands.Group(name="gban", description="Comandos de ban global")
         self._register_slash_commands()
 
@@ -260,3 +259,10 @@ class GlobalBanCog(commands.Cog):
     async def cog_command_error(self, ctx, error):
         if isinstance(error, commands.NotOwner):
             await ctx.send(embed=E.err("Somente o owner usa este comando."))
+        else:
+            logger.exception("Erro no GlobalBan")
+            await ctx.send(embed=E.err(f"Erro inesperado: {error}"))
+
+# -------- setup (obrigatório) --------
+async def setup(bot: commands.Bot):
+    await bot.add_cog(GlobalBanCog(bot))
