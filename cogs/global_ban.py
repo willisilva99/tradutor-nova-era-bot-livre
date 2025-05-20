@@ -54,7 +54,7 @@ def db():
 
 # ───────────────────────── Cog ──────────────────────────────────
 class GlobalBanCog(commands.Cog):
-    RATE_LIMIT = 30
+    RATE_LIMIT = 30          # segundos entre /gban add
     REASONS    = ["Spam", "Scam", "Tóxico", "NSFW", "Cheats", "Outro"]
 
     def __init__(self, bot: commands.Bot):
@@ -70,10 +70,8 @@ class GlobalBanCog(commands.Cog):
     async def cog_load(self):
         await self._cache_log_channels()
         await self._load_ban_cache()
-
-        # agenda a sync – só roda depois do login completo
-        self.bot.loop.create_task(self._initial_sync_on_startup())
-
+        # agenda a sincronização sem usar bot.loop
+        asyncio.create_task(self._initial_sync_on_startup())
         self.bot.tree.add_command(self.gban)
 
     async def cog_unload(self):
@@ -82,8 +80,10 @@ class GlobalBanCog(commands.Cog):
     # ───── cache ─────
     async def _cache_log_channels(self):
         with db() as s:
-            self.log_channels = {int(r.guild_id): int(r.channel_id)
-                                 for r in s.query(GlobalBanLogConfig)}
+            self.log_channels = {
+                int(r.guild_id): int(r.channel_id)
+                for r in s.query(GlobalBanLogConfig)
+            }
 
     async def _load_ban_cache(self):
         with db() as s:
@@ -123,7 +123,7 @@ class GlobalBanCog(commands.Cog):
         if total:
             logger.info("[GlobalBan] %d bans aplicados em sync de startup", total)
 
-    # ───── eventos ─────
+    # ───── events ─────
     @commands.Cog.listener()
     async def on_member_join(self, m: discord.Member):
         if m.id in self.ban_cache:
@@ -160,7 +160,7 @@ class GlobalBanCog(commands.Cog):
         with db() as s:
             return s.query(GlobalBan).filter_by(discord_id=str(uid)).delete()
 
-    # ───── executar ban / unban ─────
+    # ───── execute ban / unban ─────
     async def _exec_ban(self, user: discord.User, mod, reason: str):
         if time.time() - self.last_gban < self.RATE_LIMIT:
             raise RuntimeError(f"Aguarde {self.RATE_LIMIT}s entre bans.")
@@ -195,7 +195,7 @@ class GlobalBanCog(commands.Cog):
             desc += f"\n⚠️ Falhou em: {', '.join(fail)}"
         await self._broadcast(E.ok(desc, footer=f"Unban por {mod}"), ok)
 
-    # ───── prefix cmds ─────
+    # ───── prefix commands ─────
     @commands.has_guild_permissions(administrator=True)
     @commands.command(name="gban")
     async def _gban_prefix(self, ctx, alvo: discord.User, *, reason="Sem Motivo"):
@@ -211,7 +211,7 @@ class GlobalBanCog(commands.Cog):
         await self._exec_unban(uid, ctx.author)
         await ctx.message.add_reaction("✅")
 
-    # ───── slash cmds ─────
+    # ───── slash commands ─────
     def _register_slash_commands(self):
         admin = lambda i: i.user.guild_permissions.administrator
 
@@ -243,14 +243,13 @@ class GlobalBanCog(commands.Cog):
                 return await inter.response.send_message(
                     embed=E.info(f"Já configurado para {channel.mention}."), ephemeral=True)
             with db() as s:
-                s.merge(
-                    GlobalBanLogConfig(guild_id=str(inter.guild.id),
-                                       channel_id=str(channel.id),
-                                       set_by=str(inter.user.id))
-                )
+                s.merge(GlobalBanLogConfig(
+                    guild_id=str(inter.guild.id),
+                    channel_id=str(channel.id),
+                    set_by=str(inter.user.id)
+                ))
             self.log_channels[inter.guild.id] = channel.id
-            await inter.response.send_message(embed=E.ok(f"Canal definido: {channel.mention}"),
-                                              ephemeral=True)
+            await inter.response.send_message(embed=E.ok(f"Canal definido: {channel.mention}"), ephemeral=True)
 
         @self.gban.command(name="removelog", description="Remove canal de logs")
         @app_commands.check(lambda i: i.user.guild_permissions.manage_guild)
@@ -261,20 +260,17 @@ class GlobalBanCog(commands.Cog):
             with db() as s:
                 s.query(GlobalBanLogConfig).filter_by(guild_id=str(inter.guild.id)).delete()
             self.log_channels.pop(inter.guild.id, None)
-            await inter.response.send_message(embed=E.ok("Canal de log removido."),
-                                              ephemeral=True)
+            await inter.response.send_message(embed=E.ok("Canal de log removido."), ephemeral=True)
 
     # ───── error handler ─────
     @commands.Cog.listener()
     async def on_app_command_error(self, inter, error):
         if isinstance(error, (app_commands.CheckFailure, app_commands.MissingPermissions)):
-            await inter.response.send_message(embed=E.err("Permissão insuficiente."),
-                                              ephemeral=True)
+            await inter.response.send_message(embed=E.err("Permissão insuficiente."), ephemeral=True)
         else:
             logger.exception("Slash error", exc_info=error)
             if not inter.response.is_done():
-                await inter.response.send_message(embed=E.err("Erro inesperado."),
-                                                  ephemeral=True)
+                await inter.response.send_message(embed=E.err("Erro inesperado."), ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────
 async def setup(bot: commands.Bot):
