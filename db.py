@@ -66,7 +66,7 @@ class GlobalBanLogConfig(Base):
     id         = Column(Integer, primary_key=True, index=True)
     guild_id   = Column(String, unique=True, index=True, nullable=False)
     channel_id = Column(String, nullable=False)
-    set_by     = Column(String, nullable=False)  # quem executou /gban setlog
+    set_by     = Column(String, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow,
                         onupdate=datetime.utcnow)
 
