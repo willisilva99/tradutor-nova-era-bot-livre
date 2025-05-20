@@ -95,7 +95,8 @@ class GlobalBanCog(commands.Cog):
         await self.bot.wait_until_ready()
         while True:
             for guild in self.bot.guilds:
-                for member in guild.members:
+                # faz fetch de TODO membro (online ou não)
+                async for member in guild.fetch_members(limit=None):
                     if member.id in self.ban_cache:
                         try:
                             await guild.ban(member, reason="[GlobalBan] Auto-ban periódico")
@@ -103,7 +104,7 @@ class GlobalBanCog(commands.Cog):
                         except discord.Forbidden:
                             logger.warning(f"[GlobalBan] sem permissão para banir {member.id} em {guild.id}")
                         except Exception as e:
-                            logger.error(f"[GlobalBan] erro ao banir {member.id}: {e}")
+                            logger.error(f"[GlobalBan] erro ao banir {member.id} em {guild.id}: {e}")
             await asyncio.sleep(self.RECHECK_INTERVAL)
 
     # ───── logging util ─────
