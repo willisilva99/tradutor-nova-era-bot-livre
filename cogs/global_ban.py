@@ -208,49 +208,7 @@ class GlobalBanCog(commands.Cog):
             embed = await self._exec_unban(target_id, inter.user)
             await inter.followup.send(embed=embed)
 
-        # /gban list
-        @self.gban.command(name="list", description="Lista bans globais")
-        @app_commands.check(admin_chk)
-        async def _list(inter: discord.Interaction, page: int = 1):
-            with db() as s:
-                bans = s.query(GlobalBan).order_by(GlobalBan.timestamp.desc()).all()
-            if not bans:
-                return await inter.response.send_message(
-                    embed=E.info("Nenhum ban registrado."), ephemeral=True)
 
-            PER = 10
-            pages = (len(bans) + PER - 1) // PER
-            page = max(1, min(page, pages))
-
-            def _mention(raw: Optional[str]) -> str:
-                if raw and raw.isdigit():
-                    return f"<@{raw}>"
-                return raw or "?"
-
-            def make(idx: int):
-                chunk = bans[idx*PER:(idx+1)*PER]
-                lines = [
-                    f"`{b.discord_id}` • {b.reason} • banido por {_mention(b.banned_by)}"
-                    f" • <t:{int(b.timestamp.timestamp())}:R>"
-                    for b in chunk
-                ]
-                return E.info("\n".join(lines), footer=f"Pág {idx+1}/{pages}")
-
-            class Pager(discord.ui.View):
-                def __init__(self, idx=page-1):
-                    super().__init__(timeout=60); self.idx = idx
-                @discord.ui.button(label="◀️")
-                async def prev(self, _, i):
-                    if self.idx > 0:
-                        self.idx -= 1
-                        await i.response.edit_message(embed=make(self.idx), view=self)
-                @discord.ui.button(label="▶️")
-                async def nxt(self, _, i):
-                    if self.idx < pages-1:
-                        self.idx += 1
-                        await i.response.edit_message(embed=make(self.idx), view=self)
-
-            await inter.response.send_message(embed=make(page-1), view=Pager(), ephemeral=True)
 
         # /gban setlog
         @self.gban.command(name="setlog", description="Define canal de logs")
