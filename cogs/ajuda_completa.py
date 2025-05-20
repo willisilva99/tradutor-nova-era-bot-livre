@@ -6,60 +6,6 @@ import asyncio
 # ================ 1) COMANDOS ======================
 # ===================================================
 
-KEYWORDS_COMANDOS = [
-    "comandos do servidor",
-    "qual comando",
-    "como ganha drop",
-    "comandos"
-]
-
-SLASH_COMMANDS_INFO = (
-    "**Comandos com Barra (/)**\n"
-    "`/credito` - Concede 50 créditos por hora.\n"
-    "`/vip` - Concede 100 créditos por hora.\n"
-    "`/bonus` - Concede 500 créditos por hora.\n"
-    "`/vote` - Ao votar no site, você ganha moeda VIP e zombite.\n"
-    "`/lua` - Teleporta você para a lua comunitária.\n"
-    "`/market` - Leva você até o market, onde ficam todas as máquinas.\n"
-    "`/safe` - Vai até o market, fica 60s e retorna para onde você digitou o comando.\n"
-    "`/airdrop` - Ganha um drop.\n"
-    "`/ping` - Mostra seu ping.\n"
-    "`/who` - Exibe sua localização, total de jogadores online e próximos.\n"
-    "`/wallet` - Mostra seu saldo de crédito na carteira.\n"
-    "`/settele [nome]` - Cria um teleporte com o nome informado.\n"
-    "`/renametele [nome]` - Renomeia um teleporte existente.\n"
-    "`/telelist` - Lista todos os seus teleportes.\n"
-    "`/removetele [nome]` - Apaga o teleporte com o nome especificado.\n"
-    "`/tele [nome]` - Teleporta para o teleporte criado com o nome informado.\n"
-    "`/arena` - Teleporta você até a arena PvP (Player vs Player).\n"
-    "`/drone` - Exibe localização do drone perdido.\n"
-    "`/reset` - Reseta seu personagem, apagando tudo e começando do zero.\n"
-    "`/claim` - Resgata itens do site que você comprou."
-)
-
-EXCLAMATION_COMMANDS_INFO = (
-    "**Comandos com Exclamação (!)**\n"
-    "`!vote` - Abre o site de votação.\n"
-    "`!amigo [nome]` - Teleporta você até o amigo especificado.\n"
-    "`!discord` - Entra no Discord do servidor.\n"
-    "`!loteria` - Exibe as informações da loteria de dukes.\n"
-    "`!loteria entrar` - Entra na loteria com 1000 dukes.\n"
-    "`!loc` - Exibe sua localização.\n"
-    "`!fps` - Mostra seu FPS (frames por segundo).\n"
-    "`!bug` - Se estiver preso em um bug, utiliza para sair dessa situação.\n"
-    "`!killme` - Mata seu personagem.\n"
-    "`!suicide` - Executa o comando para suicídio do personagem."
-)
-
-def criar_embed_comandos() -> discord.Embed:
-    """Embed completo para os Comandos do Servidor."""
-    embed = discord.Embed(
-        title="Lista de Comandos do Servidor",
-        description=f"{SLASH_COMMANDS_INFO}\n\n{EXCLAMATION_COMMANDS_INFO}",
-        color=discord.Color.green()
-    )
-    embed.set_footer(text="Comandos do Servidor • 7 Days to Die")
-    return embed
 
 
 # ===================================================
