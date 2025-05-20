@@ -1,619 +1,300 @@
+import re
+import json
+import os
+import logging
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-from datetime import timedelta, datetime
+from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
+
+
+class EmbedFactory:
+    """Fábrica para criar embeds padronizados, ricos e reutilizáveis."""
+    @staticmethod
+    def base(title, description, color=discord.Color.blurple(), icon_url=None, footer=None, thumbnail_url=None):
+        embed = discord.Embed(title=title, description=description, color=color, timestamp=datetime.now(timezone.utc))
+        if icon_url:
+            embed.set_author(name=title, icon_url=icon_url)
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
+        if footer:
+            embed.set_footer(text=footer)
+        return embed
+
+    @staticmethod
+    def success(description, title="✔️ Sucesso", **kwargs):
+        return EmbedFactory.base(title, description, color=discord.Color.green(), **kwargs)
+
+    @staticmethod
+    def error(description, title="❌ Erro", **kwargs):
+        return EmbedFactory.base(title, description, color=discord.Color.red(), **kwargs)
+
+    @staticmethod
+    def info(description, title="ℹ️ Informação", **kwargs):
+        return EmbedFactory.base(title, description, color=discord.Color.blue(), **kwargs)
+
 
 class AdminCog(commands.Cog):
     """
-    Comandos administrativos avançados, incluindo mute, kick, warn, slowmode, logs,
-    proteção contra palavrões e muito mais.
+    Comandos administrativos avançados e utilitários:
+    ban/kick/tempban/unban, purge, slowmode, lockdown, role/nick management,
+    server/user info, anti-swear com auto-warns e muito mais.
     """
-    def __init__(self, bot):
-        self.bot = bot
 
-        # ===================== Banimento Temporário =====================
-        self.banned_users = {}  # {guild_id: {user_id: datetime_unban}}
+    STATE_FILE = "admin_state.json"
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.banned_users = {}   # {guild_id: {user_id: unban_datetime}}
+        self.warns = {}          # {guild_id: {user_id: warn_count}}
+        self.anti_swear_active = True
+        self.blocked_words = [
+            "porra", "caralho", "merda", "puta", "cacete", "fodase", "foda-se",
+            "filhodaputa", "filho da puta", "vai se foder", "vai te catar",
+            "viado", "bicha", "traveco", "tchola",
+            "macaco", "negro de merda", "crioulada",
+            "sua mãe", "sua avó", "seu pai", "seu irmão",
+            "idiota", "burro", "retardado", "imbecil", "otário"
+        ]
+        self.blocked_patterns = [re.compile(rf"\b{re.escape(w)}\b", re.IGNORECASE) for w in self.blocked_words]
+
+        self.load_state()
         self.tempban_task.start()
 
-        # ===================== Sistema de Avisos (Warns) =====================
-        self.warns = {}  # {user_id: quantidade_de_warns}
+    def cog_unload(self):
+        self.tempban_task.cancel()
+        self.save_state()
 
-        # ===================== Anti-Swear (Básico) =====================
-        self.anti_swear_active = True
-        self.blocked_words = ["palavrão1", "palavrão2", "palavrão3"]
-
-    # ==========================================================
-    #                       TAREFA AGENDADA
-    # ==========================================================
     @tasks.loop(minutes=1)
     async def tempban_task(self):
-        """Verifica se há usuários a serem desbanidos (ban temporário)."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for guild_id, bans in list(self.banned_users.items()):
             for user_id, unban_time in list(bans.items()):
                 if now >= unban_time:
                     guild = self.bot.get_guild(guild_id)
-                    user = await self.bot.fetch_user(user_id)
-                    if guild and user:
-                        await guild.unban(user, reason="Ban temporário expirado")
-                        del self.banned_users[guild_id][user_id]
+                    if guild:
+                        try:
+                            await guild.unban(discord.Object(id=user_id), reason="Ban temporário expirado")
+                        except Exception:
+                            logger.exception("Falha ao desbanir temporário")
+                    del self.banned_users[guild_id][user_id]
+        self.save_state()
 
-    # ==========================================================
-    #              LISTENER PARA ERROS DE SLASH
-    # ==========================================================
-    @commands.Cog.listener()
-    async def on_app_command_error(self, interaction: discord.Interaction, error):
-        """
-        Se um usuário tentar usar comandos que exigem permissões e não tiver,
-        ou qualquer outro erro, tratamos aqui para exibir mensagens amigáveis.
-        """
-        if isinstance(error, app_commands.MissingPermissions):
-            # Usuário sem permissão
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    title="❌ Acesso Negado",
-                    description="Você não tem permissão para executar este comando!",
-                    color=discord.Color.red()
-                ),
-                ephemeral=True
-            )
-        else:
-            # Outros erros que não sejam MissingPermissions
-            # Você pode personalizar ou apenas relançar
-            # para aparecer no console (debug).
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    title="❌ Erro",
-                    description=(
-                        "Ocorreu um erro ao executar o comando.\n"
-                        f"Detalhes: `{error}`"
-                    ),
-                    color=discord.Color.red()
-                ),
-                ephemeral=True
-            )
-            raise error
+    def save_state(self):
+        data = {
+            "banned_users": {
+                str(g): {str(u): dt.timestamp() for u, dt in bans.items()}
+                for g, bans in self.banned_users.items()
+            },
+            "warns": {
+                str(g): uw for g, uw in self.warns.items()
+            }
+        }
+        with open(self.STATE_FILE, "w") as f:
+            json.dump(data, f)
 
-    # ==========================================================
-    #                  FUNÇÃO DE CHECAR PERMISSÃO
-    # ==========================================================
-    async def check_permissions(self, interaction: discord.Interaction, permission: str) -> bool:
-        """
-        Checa se o autor do comando possui a permissão necessária.
-        Exemplo de permissão: 'ban_members', 'kick_members', 'manage_messages', etc.
-        Retorna False caso não tenha.
-        """
-        if not getattr(interaction.user.guild_permissions, permission, False):
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    title="❌ Acesso Negado",
-                    description="Você não tem permissão para executar este comando!",
-                    color=discord.Color.red()
-                ),
-                ephemeral=True
-            )
+    def load_state(self):
+        if not os.path.isfile(self.STATE_FILE):
+            return
+        with open(self.STATE_FILE, "r") as f:
+            data = json.load(f)
+        self.banned_users = {
+            int(g): {int(u): datetime.fromtimestamp(ts, timezone.utc) for u, ts in bans.items()}
+            for g, bans in data.get("banned_users", {}).items()
+        }
+        self.warns = {
+            int(g): {int(u): c for u, c in uw.items()}
+            for g, uw in data.get("warns", {}).items()
+        }
+
+    async def check_permissions(self, interaction, perm: str):
+        if not getattr(interaction.user.guild_permissions, perm, False):
+            embed = EmbedFactory.error("Você não tem permissão para executar este comando!", footer="Permissões")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             return False
         return True
 
-    # ==========================================================
-    #                      SISTEMA DE LOGS
-    # ==========================================================
-    async def log_action(
-        self,
-        interaction: discord.Interaction,
-        action: str,
-        user: discord.Member,
-        reason: str,
-        extra_info: str = ""
-    ):
-        """
-        Registra a ação de moderação em um canal de logs chamado 'logs'.
-        Se quiser, pode trocar o nome do canal ou buscar por ID.
-        `extra_info` pode incluir mais detalhes sobre a punição.
-        """
-        log_channel = discord.utils.get(interaction.guild.channels, name="logs")
-        if log_channel:
-            embed = discord.Embed(
-                title=f"📜 Ação de Moderação: {action}",
-                description=(
-                    f"👤 **Usuário**: {user.mention}\n"
-                    f"❓ **Motivo**: {reason}\n"
-                    f"👮 **Moderador**: {interaction.user.mention}\n"
-                    f"{extra_info}\n"
-                    f"📅 **Data**: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-                ),
-                color=discord.Color.blue()
-            )
-            await log_channel.send(embed=embed)
-
-    async def send_dm_if_possible(self, user: discord.User, message: str):
-        """
-        Tenta enviar DM ao usuário. Se não for possível (por privacidade), ignora.
-        """
-        try:
-            await user.send(message)
-        except discord.Forbidden:
-            # Usuário bloqueou DMs ou algo similar
-            pass
-
-    # ==========================================================
-    #                   COMANDO TEMPBAN
-    # ==========================================================
-    @app_commands.command(name="tempban", description="⏳ Bane temporariamente um usuário (em minutos).")
-    @app_commands.describe(
-        user="Usuário que será banido",
-        duration="Duração em minutos",
-        reason="Motivo do ban (opcional)",
-        dm_user="Enviar DM ao usuário banido? (padrão = False)"
-    )
-    async def tempban(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member,
-        duration: int,
-        reason: str = "Não especificado",
-        dm_user: bool = False
-    ):
-        """
-        Bane o usuário por X minutos.
-        """
-        if not await self.check_permissions(interaction, "ban_members"):
+    async def log_action(self, interaction, action: str, user, reason: str, extra: str = ""):
+        channel = discord.utils.get(interaction.guild.channels, name="logs")
+        if not channel:
             return
-
-        unban_time = datetime.utcnow() + timedelta(minutes=duration)
-        self.banned_users.setdefault(interaction.guild.id, {})[user.id] = unban_time
-
-        await interaction.guild.ban(user, reason=reason)
-
-        # Enviar DM se solicitado
-        if dm_user:
-            await self.send_dm_if_possible(
-                user,
-                f"Você foi banido temporariamente de **{interaction.guild.name}** por **{duration}** minutos.\n"
-                f"**Motivo**: {reason}"
-            )
-
-        await self.log_action(interaction, "Ban Temporário", user, reason, extra_info=f"⏰ Duração: {duration}min")
-
-        embed = discord.Embed(
-            title="⏳ Ban Temporário",
-            description=(
-                f"**{user.mention} foi banido por {duration} minutos.**\n"
-                f"**Motivo**: {reason}"
-            ),
-            color=discord.Color.red()
+        embed = EmbedFactory.info(
+            f"👤 **Usuário**: {user.mention}\n"
+            f"🔍 **Motivo**: {reason}\n"
+            f"{extra}",
+            title=f"📜 {action}",
+            footer=f"{interaction.guild.name} • {datetime.now():%d/%m/%Y %H:%M}"
         )
-        await interaction.response.send_message(embed=embed)
+        await channel.send(embed=embed)
 
-    # ==========================================================
-    #                        COMANDO BAN
-    # ==========================================================
-    @app_commands.command(name="ban", description="🚫 Bane permanentemente um usuário.")
-    @app_commands.describe(dm_user="Enviar DM ao usuário banido? (padrão = False)")
-    async def ban(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member,
-        reason: str = "Não especificado",
-        dm_user: bool = False
-    ):
-        if not await self.check_permissions(interaction, "ban_members"):
-            return
-
-        await interaction.guild.ban(user, reason=reason)
-
-        if dm_user:
-            await self.send_dm_if_possible(
-                user,
-                f"Você foi banido permanentemente de **{interaction.guild.name}**.\n"
-                f"**Motivo**: {reason}"
-            )
-
-        await self.log_action(interaction, "Ban Permanente", user, reason)
-
-        embed = discord.Embed(
-            title="🚫 Ban Permanente",
-            description=(
-                f"**{user.mention} foi banido permanentemente.**\n"
-                f"**Motivo**: {reason}"
-            ),
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed)
-
-    # ==========================================================
-    #                       COMANDO KICK
-    # ==========================================================
-    @app_commands.command(name="kick", description="👟 Expulsa um usuário do servidor.")
-    @app_commands.describe(dm_user="Enviar DM ao usuário expulso? (padrão = False)")
-    async def kick(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member,
-        reason: str = "Não especificado",
-        dm_user: bool = False
-    ):
-        if not await self.check_permissions(interaction, "kick_members"):
-            return
-
-        await user.kick(reason=reason)
-
-        if dm_user:
-            await self.send_dm_if_possible(
-                user,
-                f"Você foi expulso de **{interaction.guild.name}**.\nMotivo: {reason}"
-            )
-
-        await self.log_action(interaction, "Kick", user, reason)
-
-        embed = discord.Embed(
-            title="👟 Kick",
-            description=(
-                f"**{user.mention} foi expulso do servidor.**\n"
-                f"**Motivo**: {reason}"
-            ),
-            color=discord.Color.orange()
-        )
-        await interaction.response.send_message(embed=embed)
-
-    # ==========================================================
-    #                       COMANDO MUTE
-    # ==========================================================
-    @app_commands.command(name="mute", description="🔇 Silencia um usuário por X minutos (0 = permanente).")
-    @app_commands.describe(
-        user="Usuário a ser mutado",
-        duration="Duração em minutos (0 = permanente)",
-        reason="Motivo do mute (opcional)",
-        dm_user="Enviar DM ao usuário mutado? (padrão = False)"
-    )
-    async def mute(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member,
-        duration: int = 0,
-        reason: str = "Não especificado",
-        dm_user: bool = False
-    ):
-        """
-        Se 'duration' for 0, muta permanentemente até que seja desmutado.
-        É necessário ter (ou criar) um papel chamado 'Mutado'.
-        """
-        if not await self.check_permissions(interaction, "manage_roles"):
-            return
-
-        muted_role = discord.utils.get(interaction.guild.roles, name="Mutado")
-        if not muted_role:
-            # Tenta criar a role
-            try:
-                muted_role = await interaction.guild.create_role(
-                    name="Mutado",
-                    reason="Criando papel para Mute."
-                )
-                for channel in interaction.guild.channels:
-                    await channel.set_permissions(muted_role, send_messages=False, speak=False)
-            except Exception as e:
-                await interaction.response.send_message(
-                    f"❌ Não foi possível criar/adicionar o papel 'Mutado'. Erro: {e}",
-                    ephemeral=True
-                )
-                return
-
-        await user.add_roles(muted_role, reason=reason)
-
-        if dm_user:
-            await self.send_dm_if_possible(
-                user,
-                f"Você foi mutado no servidor **{interaction.guild.name}**.\n"
-                f"**Motivo**: {reason}\n"
-                f"{'Duração: ' + str(duration) + ' minutos' if duration > 0 else 'Duração indeterminada'}"
-            )
-
-        await self.log_action(
-            interaction,
-            "Mute",
-            user,
-            reason,
-            extra_info=(
-                f"Tempo: {duration} minutos" if duration > 0 else "Tempo: Indeterminado"
-            )
-        )
-
-        if duration > 0:
-            embed = discord.Embed(
-                title="🔇 Mute Temporário",
-                description=(
-                    f"**{user.mention} foi silenciado por {duration} minutos.**\n"
-                    f"**Motivo**: {reason}"
-                ),
-                color=discord.Color.orange()
-            )
-            await interaction.response.send_message(embed=embed)
-            await self.unmute_after_delay(interaction.guild, user, duration, reason)
+    @commands.Cog.listener()
+    async def on_app_command_error(self, interaction, error):
+        if isinstance(error, app_commands.MissingPermissions):
+            embed = EmbedFactory.error("Você não tem permissão para este comando.")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
         else:
-            embed = discord.Embed(
-                title="🔇 Mute Permanente",
-                description=(
-                    f"**{user.mention} foi silenciado por tempo indeterminado.**\n"
-                    f"**Motivo**: {reason}"
-                ),
-                color=discord.Color.orange()
-            )
-            await interaction.response.send_message(embed=embed)
+            embed = EmbedFactory.error(f"Ocorreu um erro: `{error}`")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            logger.exception(f"Erro em comando {interaction.command}: {error}")
 
-    async def unmute_after_delay(
-        self,
-        guild: discord.Guild,
-        user: discord.Member,
-        duration: int,
-        reason: str
-    ):
-        await discord.utils.sleep_until(datetime.utcnow() + timedelta(minutes=duration))
-        muted_role = discord.utils.get(guild.roles, name="Mutado")
-        if muted_role and muted_role in user.roles:
-            await user.remove_roles(muted_role, reason="Mute expirado")
-
-            channel = discord.utils.get(guild.text_channels, name="logs")
-            if channel:
-                embed = discord.Embed(
-                    title="🔊 Desmute automático",
-                    description=(
-                        f"**{user.mention} foi desmutado** após {duration} minutos.\n"
-                        f"**Motivo original**: {reason}"
-                    ),
-                    color=discord.Color.green()
-                )
-                await channel.send(embed=embed)
-
-    # ==========================================================
-    #                       COMANDO UNMUTE
-    # ==========================================================
-    @app_commands.command(name="unmute", description="🔊 Remove o mute de um usuário.")
-    @app_commands.describe(dm_user="Enviar DM ao usuário que foi desmutado? (padrão = False)")
-    async def unmute(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member,
-        reason: str = "Não especificado",
-        dm_user: bool = False
-    ):
-        if not await self.check_permissions(interaction, "manage_roles"):
-            return
-
-        muted_role = discord.utils.get(interaction.guild.roles, name="Mutado")
-        if muted_role and muted_role in user.roles:
-            await user.remove_roles(muted_role, reason=reason)
-
-            if dm_user:
-                await self.send_dm_if_possible(
-                    user,
-                    f"Você foi desmutado no servidor **{interaction.guild.name}**.\n"
-                    f"**Motivo**: {reason}"
-                )
-
-            await self.log_action(interaction, "Unmute", user, reason)
-
-            embed = discord.Embed(
-                title="🔊 Unmute",
-                description=(
-                    f"**{user.mention} foi desmutado.**\n"
-                    f"**Motivo**: {reason}"
-                ),
-                color=discord.Color.green()
-            )
-            await interaction.response.send_message(embed=embed)
-        else:
-            await interaction.response.send_message(
-                f"**{user.mention} não está mutado.**",
-                ephemeral=True
-            )
-
-    # ==========================================================
-    #                      COMANDO WARN
-    # ==========================================================
-    @app_commands.command(name="warn", description="⚠️ Envia um aviso a um usuário.")
-    @app_commands.describe(dm_user="Enviar DM ao usuário avisado? (padrão = False)")
-    async def warn(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member,
-        reason: str = "Não especificado",
-        dm_user: bool = False
-    ):
-        """
-        Envia um aviso ao usuário.
-        Se atingir certos limites de warns, executa punições automáticas (exemplo).
-        """
-        if not await self.check_permissions(interaction, "manage_messages"):
-            return
-
-        await interaction.response.defer(thinking=True, ephemeral=True)
-
-        self.warns.setdefault(user.id, 0)
-        self.warns[user.id] += 1
-        current_warns = self.warns[user.id]
-
-        if dm_user:
-            await self.send_dm_if_possible(
-                user,
-                f"Você recebeu um **warn** no servidor **{interaction.guild.name}**.\nMotivo: {reason}"
-            )
-
-        # Ações automáticas dependendo da contagem de warns
-        # (Customize como quiser: mute, kick, ban, etc.)
-        if current_warns == 3:
-            await self.mute(interaction, user, 10, "3 avisos acumulados", dm_user=False)
-        elif current_warns == 5:
-            await self.kick(interaction, user, "5 avisos acumulados", dm_user=False)
-        elif current_warns == 7:
-            await self.ban(interaction, user, "7 avisos acumulados - ban permanente", dm_user=False)
-
-        await self.log_action(interaction, "Aviso (Warn)", user, reason)
-
-        embed = discord.Embed(
-            title="⚠️ Usuário Avisado",
-            description=(
-                f"**{user.mention} recebeu um aviso!** (Total de warns: **{current_warns}**)\n"
-                f"**Motivo**: {reason}"
-            ),
-            color=discord.Color.orange()
-        )
-        # Envia no canal
-        await interaction.channel.send(embed=embed)
-        # Mensagem ephemeral confirmando ao admin
-        await interaction.followup.send("✅ O usuário foi avisado.", ephemeral=True)
-
-    @app_commands.command(name="listwarns", description="Lista quantos warns um usuário possui.")
-    async def list_warns(self, interaction: discord.Interaction, user: discord.Member):
-        if not await self.check_permissions(interaction, "manage_messages"):
-            return
-
-        warns_count = self.warns.get(user.id, 0)
-        embed = discord.Embed(
-            title="⚠️ Contagem de Avisos",
-            description=f"O usuário {user.mention} possui **{warns_count}** avisos.",
-            color=discord.Color.orange()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(name="clearwarns", description="Remove todos os warns de um usuário.")
-    async def clear_warns(self, interaction: discord.Interaction, user: discord.Member):
-        if not await self.check_permissions(interaction, "manage_messages"):
-            return
-
-        if user.id in self.warns:
-            del self.warns[user.id]
-
-        embed = discord.Embed(
-            title="⚠️ Avisos Removidos",
-            description=f"Todos os avisos de {user.mention} foram removidos.",
-            color=discord.Color.green()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # ==========================================================
-    #                    COMANDO SLOWMODE
-    # ==========================================================
-    @app_commands.command(name="slowmode", description="Define o modo lento (slowmode) em segundos.")
-    async def slowmode(self, interaction: discord.Interaction, segundos: int):
-        if not await self.check_permissions(interaction, "manage_channels"):
-            return
-
-        await interaction.channel.edit(slowmode_delay=segundos)
-        embed = discord.Embed(
-            title="⌛ Slowmode",
-            description=f"Modo lento ajustado para `{segundos}` segundos neste canal.",
-            color=discord.Color.blue()
-        )
-        await interaction.response.send_message(embed=embed)
-
-    # ==========================================================
-    #                  COMANDOS LOCK/UNLOCK
-    # ==========================================================
-    @app_commands.command(name="lockchannel", description="🔒 Tranca o canal (ninguém pode enviar mensagens).")
-    async def lock_channel(self, interaction: discord.Interaction, reason: str = "Não especificado"):
-        if not await self.check_permissions(interaction, "manage_channels"):
-            return
-
-        overwrite = interaction.channel.overwrites_for(interaction.guild.default_role)
-        overwrite.send_messages = False
-        await interaction.channel.set_permissions(interaction.guild.default_role, overwrite=overwrite, reason=reason)
-
-        await self.log_action(interaction, "LockChannel", interaction.user, reason)
-
-        embed = discord.Embed(
-            title="🔒 Canal Trancado",
-            description=f"{interaction.channel.mention} foi **trancado**.\nMotivo: {reason}",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed)
-
-    @app_commands.command(name="unlockchannel", description="🔓 Destranca o canal (todos podem enviar mensagens).")
-    async def unlock_channel(self, interaction: discord.Interaction, reason: str = "Não especificado"):
-        if not await self.check_permissions(interaction, "manage_channels"):
-            return
-
-        overwrite = interaction.channel.overwrites_for(interaction.guild.default_role)
-        overwrite.send_messages = True
-        await interaction.channel.set_permissions(interaction.guild.default_role, overwrite=overwrite, reason=reason)
-
-        await self.log_action(interaction, "UnlockChannel", interaction.user, reason)
-
-        embed = discord.Embed(
-            title="🔓 Canal Destrancado",
-            description=f"{interaction.channel.mention} foi **destrancado**.\nMotivo: {reason}",
-            color=discord.Color.green()
-        )
-        await interaction.response.send_message(embed=embed)
-
-    # ==========================================================
-    #                    COMANDO CLEAR
-    # ==========================================================
-    @app_commands.command(name="clear", description="🧹 Limpa um número de mensagens do canal.")
-    async def clear_messages(self, interaction: discord.Interaction, quantidade: int):
-        if not await self.check_permissions(interaction, "manage_messages"):
-            return
-
-        await interaction.channel.purge(limit=quantidade+1)  # +1 para remover também o comando do usuário
-        embed = discord.Embed(
-            title="🧹 Limpeza de Mensagens",
-            description=f"Foram deletadas **{quantidade}** mensagens neste canal.",
-            color=discord.Color.blurple()
-        )
-        # Enviar uma mensagem com ephemeral = False (ou True, se preferir)
-        await interaction.response.send_message(embed=embed)
-
-    # ==========================================================
-    #                    ANTI-SWEAR (BÁSICO)
-    # ==========================================================
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if self.anti_swear_active:
-            if message.author.bot or not message.guild:
+        if message.author.bot or not message.guild or not self.anti_swear_active:
+            return
+        for patt in self.blocked_patterns:
+            if patt.search(message.content):
+                try:
+                    await message.delete()
+                except discord.Forbidden:
+                    return
+                gid, uid = message.guild.id, message.author.id
+                self.warns.setdefault(gid, {})
+                count = self.warns[gid].get(uid, 0) + 1
+                self.warns[gid][uid] = count
+                self.save_state()
+                await message.channel.send(f"⚠️ {message.author.mention}, você recebeu **{count}/3** avisos.")
+                if count >= 3:
+                    try:
+                        await message.guild.kick(message.author, reason="3 avisos de palavrões")
+                        del self.warns[gid][uid]
+                        self.save_state()
+                        await message.channel.send(f"👢 {message.author.mention} foi expulso após 3 avisos.")
+                    except discord.Forbidden:
+                        await message.channel.send(f"❌ Sem permissão para expulsar {message.author.mention}.")
                 return
 
-            msg_lower = message.content.lower()
-            for word in self.blocked_words:
-                if word in msg_lower:
-                    # Deleta a mensagem
-                    try:
-                        await message.delete()
-                        # Logar no canal #logs (opcional)
-                        channel = discord.utils.get(message.guild.channels, name="logs")
-                        if channel:
-                            embed = discord.Embed(
-                                title="⚠️ Anti-Swear",
-                                description=(
-                                    f"Mensagem deletada de {message.author.mention}\n"
-                                    f"**Conteúdo:** {message.content}"
-                                ),
-                                color=discord.Color.red()
-                            )
-                            await channel.send(embed=embed)
-                    except:
-                        pass
-                    finally:
-                        break
-
-    @app_commands.command(name="toggleswear", description="🛡️ Liga/Desliga a filtragem de palavrões.")
-    async def toggle_swear(self, interaction: discord.Interaction):
-        if not await self.check_permissions(interaction, "manage_messages"):
-            return
-
-        self.anti_swear_active = not self.anti_swear_active
-        status = "ativada" if self.anti_swear_active else "desativada"
-        embed = discord.Embed(
-            title="🛡️ Anti-Swear",
-            description=f"A proteção contra palavrões foi **{status}**.",
-            color=discord.Color.green()
-        )
+    # ─────────────────────────────────────────────────────────────────────────
+    #                        COMANDOS DE MODERAÇÃO
+    # ─────────────────────────────────────────────────────────────────────────
+    @app_commands.command(name="ban", description="🚫 Bane permanentemente um usuário.")
+    @app_commands.describe(user="Usuário", reason="Motivo")
+    async def ban(self, interaction, user: discord.Member, reason: str = "Não especificado"):
+        if not await self.check_permissions(interaction, "ban_members"): return
+        await interaction.guild.ban(user, reason=reason)
+        await self.log_action(interaction, "Ban Permanente", user, reason)
+        embed = EmbedFactory.success(f"{user.mention} banido. Motivo: {reason}")
         await interaction.response.send_message(embed=embed)
 
-    # ==========================================================
-    #                   UNLOAD / FINALIZAÇÃO
-    # ==========================================================
-    async def cog_unload(self):
-        self.tempban_task.cancel()
+    @app_commands.command(name="tempban", description="⏳ Ban temporário (minutos).")
+    @app_commands.describe(user="Usuário", duration="Minutos", reason="Motivo")
+    async def tempban(self, interaction, user: discord.Member, duration: int, reason: str = "Não especificado"):
+        if not await self.check_permissions(interaction, "ban_members"): return
+        when = datetime.now(timezone.utc) + timedelta(minutes=duration)
+        self.banned_users.setdefault(interaction.guild.id, {})[user.id] = when
+        await interaction.guild.ban(user, reason=reason)
+        self.save_state()
+        await self.log_action(interaction, "Ban Temporário", user, f"{reason} (por {duration}min)")
+        embed = EmbedFactory.success(f"{user.mention} banido por {duration}min. Motivo: {reason}")
+        await interaction.response.send_message(embed=embed)
 
-# Função obrigatória para carregar o cog
-async def setup(bot):
+    @app_commands.command(name="unban", description="♻️ Desbane um usuário pelo ID.")
+    @app_commands.describe(user_id="ID do usuário")
+    async def unban(self, interaction, user_id: str):
+        if not await self.check_permissions(interaction, "ban_members"): return
+        try:
+            await interaction.guild.unban(discord.Object(id=int(user_id)))
+            embed = EmbedFactory.success(f"Usuário `{user_id}` desbanido.")
+        except Exception:
+            embed = EmbedFactory.error(f"Não foi possível desbanir `{user_id}`.")
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="banlist", description="📜 Lista de bans ativos.")
+    async def banlist(self, interaction):
+        if not await self.check_permissions(interaction, "ban_members"): return
+        bans = await interaction.guild.bans()
+        desc = "\n".join(f"{b.user} - {b.reason or 'Sem motivo'}" for b in bans) or "Nenhum ban ativo."
+        embed = EmbedFactory.info(desc, title="🛑 Bans Ativos")
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="kick", description="👟 Expulsa um usuário.")
+    @app_commands.describe(user="Usuário", reason="Motivo")
+    async def kick(self, interaction, user: discord.Member, reason: str = "Não especificado"):
+        if not await self.check_permissions(interaction, "kick_members"): return
+        await user.kick(reason=reason)
+        await self.log_action(interaction, "Kick", user, reason)
+        embed = EmbedFactory.success(f"{user.mention} expulso. Motivo: {reason}")
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="purge", description="🧹 Remove N mensagens.")
+    @app_commands.describe(amount="Quantidade", reason="Motivo (opcional)")
+    async def purge(self, interaction, amount: int, reason: str = None):
+        if not await self.check_permissions(interaction, "manage_messages"): return
+        deleted = await interaction.channel.purge(limit=amount+1)
+        text = f"{len(deleted)-1} mensagens removidas."
+        if reason: text += f" Motivo: {reason}"
+        embed = EmbedFactory.success(text)
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="slowmode", description="⌛ Define slowmode (segundos).")
+    @app_commands.describe(seconds="Segundos")
+    async def slowmode(self, interaction, seconds: int):
+        if not await self.check_permissions(interaction, "manage_channels"): return
+        await interaction.channel.edit(slowmode_delay=seconds)
+        embed = EmbedFactory.success(f"Slowmode definido para {seconds}s neste canal.")
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="lock", description="🔒 Tranca o canal.")
+    @app_commands.describe(reason="Motivo")
+    async def lock(self, interaction, reason: str = "Não especificado"):
+        if not await self.check_permissions(interaction, "manage_channels"): return
+        await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False)
+        embed = EmbedFactory.success(f"Canal trancado. Motivo: {reason}")
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="unlock", description="🔓 Destranca o canal.")
+    @app_commands.describe(reason="Motivo")
+    async def unlock(self, interaction, reason: str = "Não especificado"):
+        if not await self.check_permissions(interaction, "manage_channels"): return
+        await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=True)
+        embed = EmbedFactory.success(f"Canal destrancado. Motivo: {reason}")
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="setnick", description="✏️ Altera nickname de um usuário.")
+    @app_commands.describe(user="Usuário", nickname="Novo nickname")
+    async def setnick(self, interaction, user: discord.Member, nickname: str):
+        if not await self.check_permissions(interaction, "manage_nicknames"): return
+        await user.edit(nick=nickname)
+        embed = EmbedFactory.success(f"{user.mention} agora é **{nickname}**.")
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="role", description="⚙️ Adiciona ou remove um cargo.")
+    @app_commands.describe(action="add ou remove", user="Usuário", role="Cargo")
+    async def role(self, interaction, action: str, user: discord.Member, role: discord.Role):
+        if not await self.check_permissions(interaction, "manage_roles"): return
+        if action.lower() == "add":
+            await user.add_roles(role)
+            embed = EmbedFactory.success(f"{role.mention} adicionado a {user.mention}.")
+        else:
+            await user.remove_roles(role)
+            embed = EmbedFactory.success(f"{role.mention} removido de {user.mention}.")
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="serverinfo", description="🏷️ Informações do servidor.")
+    async def serverinfo(self, interaction):
+        guild = interaction.guild
+        desc = (
+            f"📅 Criado em: {guild.created_at:%d/%m/%Y}\n"
+            f"👑 Dono: {guild.owner}\n"
+            f"👥 Membros: {guild.member_count}\n"
+            f"📝 Canais: {len(guild.channels)}\n"
+            f"🏷️ Cargos: {len(guild.roles)}"
+        )
+        embed = EmbedFactory.info(desc, title=f"📋 {guild.name}")
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="userinfo", description="ℹ️ Informações de um usuário.")
+    @app_commands.describe(user="Usuário")
+    async def userinfo(self, interaction, user: discord.Member):
+        desc = (
+            f"🆔 ID: {user.id}\n"
+            f"📅 Entrou: {user.joined_at:%d/%m/%Y}\n"
+            f"🏷️ Cargos: {', '.join(r.name for r in user.roles[1:]) or 'Nenhum'}"
+        )
+        embed = EmbedFactory.info(desc, title=f"👤 {user}")
+        await interaction.response.send_message(embed=embed)
+
+
+async def setup(bot: commands.Bot):
     await bot.add_cog(AdminCog(bot))
