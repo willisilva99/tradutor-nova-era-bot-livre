@@ -27,18 +27,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # Base declarativa
 Base = declarative_base()
 
-# ---------------------------------------------------
-# Tabela ServerConfig (já existente)
-# ---------------------------------------------------
-class ServerConfig(Base):
-    __tablename__ = "server_config"
 
-    id = Column(Integer, primary_key=True, index=True)
-    guild_id = Column(String, index=True, nullable=False)
-    ip = Column(String, nullable=False)
-    port = Column(Integer, nullable=False)
-    password = Column(String, nullable=True)
-    channel_id = Column(String, nullable=False)
 
 # ---------------------------------------------------
 # Tabela ServerStatusConfig (já existente)
@@ -63,7 +52,7 @@ class PlayerName(Base):
     in_game_name = Column(String, nullable=False)
 
 # ---------------------------------------------------
-# Tabela GuildConfig (NOVA) - para verificação/etc.
+# Tabela GuildConfig (já existente)
 # ---------------------------------------------------
 class GuildConfig(Base):
     __tablename__ = "guild_config"
@@ -76,17 +65,18 @@ class GuildConfig(Base):
     verificado_role_id      = Column(String, nullable=True)
     # Se quiser mais campos (wait_time, etc.), adicione aqui.
 
-# ---------------------------------------------------
-# Tabela AI Cache (nova) para memórias da IA
-# ---------------------------------------------------
-class AICache(Base):
-    __tablename__ = "ai_cache"
-    __table_args__ = (Index("ix_ai_cache_question", "question"),)
 
-    id         = Column(Integer, primary_key=True)
-    question   = Column(Text, unique=True, nullable=False, index=True)
-    answer     = Column(Text, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+# ---------------------------------------------------
+# Tabela GlobalBan (nova) - histórico de bans globais
+# ---------------------------------------------------
+class GlobalBan(Base):
+    __tablename__ = "global_bans"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    discord_id = Column(String, index=True, nullable=False)
+    banned_by  = Column(String, nullable=False)
+    reason     = Column(String, nullable=False)
+    timestamp  = Column(DateTime, default=datetime.utcnow)
 
 # Cria as tabelas se não existirem
 try:
