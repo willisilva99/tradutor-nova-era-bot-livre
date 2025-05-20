@@ -1,4 +1,10 @@
 # cogs/global_ban.py
+"""
+Cog: GlobalBan – banimento global entre todos os servidores onde o bot está.
+Requisitos:
+    • Tabela GlobalBan (histórico)
+    • Tabela GlobalBanLogConfig (canal de log + set_by)
+"""
 import asyncio, logging, time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -8,53 +14,62 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from db import (
-    SessionLocal,
-    GlobalBan,
-    GlobalBanLogConfig,   # ← nova tabela usada p/ logs
-)
+from db import SessionLocal, GlobalBan, GlobalBanLogConfig
 
 logger = logging.getLogger(__name__)
 
-# ───────── helpers de embed ─────────
+# ══════════════ Embeds helper ══════════════
 class E:
     @staticmethod
-    def _b(t, d, c):
-        return discord.Embed(
-            title=t, description=d, colour=c,
-            timestamp=datetime.now(timezone.utc))
-    ok   = staticmethod(lambda d, **k: E._b("✅ Sucesso", d, discord.Color.green()).set_footer(**k))
-    err  = staticmethod(lambda d, **k: E._b("❌ Erro",    d, discord.Color.red())  .set_footer(**k))
-    info = staticmethod(lambda d, **k: E._b("ℹ️ Informação", d, discord.Color.blue()).set_footer(**k))
+    def _b(t: str, d: str, c: discord.Colour) -> discord.Embed:
+        return discord.Embed(title=t, description=d, colour=c,
+                             timestamp=datetime.now(timezone.utc))
 
-# ───────── DB helper ─────────
+    @staticmethod
+    def _final(embed: discord.Embed, *,
+               footer: Optional[str] = None,
+               thumbnail_url: Optional[str] = None) -> discord.Embed:
+        if footer:
+            embed.set_footer(text=footer)
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
+        return embed
+
+    @classmethod
+    def ok(cls, d: str, **k):   return cls._final(cls._b("✅ Sucesso",     d, discord.Color.green()), **k)
+    @classmethod
+    def err(cls, d: str, **k):  return cls._final(cls._b("❌ Erro",        d, discord.Color.red()),   **k)
+    @classmethod
+    def info(cls, d: str, **k): return cls._final(cls._b("ℹ️ Informação", d, discord.Color.blue()),  **k)
+
+# ══════════════ DB helper ══════════════
 @contextmanager
 def db():
-    s = SessionLocal()
+    sess = SessionLocal()
     try:
-        yield s
-        s.commit()
-    except:
-        s.rollback()
+        yield sess
+        sess.commit()
+    except Exception:
+        sess.rollback()
         raise
     finally:
-        s.close()
+        sess.close()
 
-# ───────── Cog ─────────
+# ══════════════ Cog ══════════════
 class GlobalBanCog(commands.Cog):
-    RATE_LIMIT = 30
+    RATE_LIMIT = 30          # segundos entre ban-adds
     REASONS    = ["Spam", "Scam", "Tóxico", "NSFW", "Cheats", "Outro"]
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.last_gban = 0.0
-        self.log_channels: dict[int, Optional[int]] = {}   # guild_id → channel_id
+        self.log_channels: dict[int, Optional[int]] = {}
         self.ban_cache: set[int] = set()
 
         self.gban = app_commands.Group(name="gban", description="Comandos de ban global")
-        self._register_slash_commands()                    # ← nome corrigido
+        self._register_slash_commands()
 
-    # ───── hooks ─────
+    # ────── lifecycle ──────
     async def cog_load(self):
         await self._cache_log_channels()
         await self._load_ban_cache()
@@ -63,41 +78,40 @@ class GlobalBanCog(commands.Cog):
     async def cog_unload(self):
         self.bot.tree.remove_command(self.gban.name, type=self.gban.type)
 
-    # ───── cache ─────
+    # ────── cache ──────
     async def _cache_log_channels(self):
         with db() as s:
-            self.log_channels = {
-                int(r.guild_id): int(r.channel_id)
-                for r in s.query(GlobalBanLogConfig)
-            }
+            self.log_channels = {int(r.guild_id): int(r.channel_id)
+                                 for r in s.query(GlobalBanLogConfig)}
 
     async def _load_ban_cache(self):
         with db() as s:
-            self.ban_cache = {int(r.discord_id) for r in s.query(GlobalBan.discord_id)}
-        logger.info("[GlobalBan] cache %d IDs", len(self.ban_cache))
+            self.ban_cache = {int(r.discord_id)
+                              for r in s.query(GlobalBan.discord_id)}
+        logger.info("[GlobalBan] cache carregado com %d IDs", len(self.ban_cache))
 
-    # ───── logging util ─────
-    async def _send_log(self, guild: discord.Guild, embed: discord.Embed):
-        ch = guild.get_channel(self.log_channels.get(guild.id, 0)) or guild.system_channel
-        if ch and ch.permissions_for(guild.me).send_messages:
+    # ────── logging util ──────
+    async def _send_log(self, g: discord.Guild, embed: discord.Embed):
+        ch = g.get_channel(self.log_channels.get(g.id, 0)) or g.system_channel
+        if ch and ch.permissions_for(g.me).send_messages:
             await ch.send(embed=embed)
 
-    async def _broadcast(self, emb: discord.Embed, guilds: List[discord.Guild]):
-        await asyncio.gather(*(self._send_log(g, emb) for g in guilds))
+    async def _broadcast(self, embed: discord.Embed, guilds: List[discord.Guild]):
+        await asyncio.gather(*(self._send_log(g, embed) for g in guilds))
 
-    # ───── DB helpers (ban) ─────
-    def _add_db(self, uid, by, reason):
+    # ────── DB helpers (ban) ──────
+    def _add_ban_db(self, uid: int, by: int, reason: str) -> bool:
         with db() as s:
-            if s.query(GlobalBan.id).filter_by(discord_id=str(uid)).first():
+            if s.query(GlobalBan).filter_by(discord_id=str(uid)).first():
                 return False
             s.add(GlobalBan(discord_id=str(uid), banned_by=str(by), reason=reason))
             return True
 
-    def _del_db(self, uid):
+    def _del_ban_db(self, uid: int) -> int:
         with db() as s:
             return s.query(GlobalBan).filter_by(discord_id=str(uid)).delete()
 
-    # ───── mass util ─────
+    # ────── mass util ──────
     async def _mass(self, guilds, fn) -> Tuple[List[discord.Guild], List[str]]:
         res = await asyncio.gather(*(fn(g) for g in guilds), return_exceptions=True)
         ok, fail = [], []
@@ -105,7 +119,7 @@ class GlobalBanCog(commands.Cog):
             (ok if not isinstance(r, Exception) else fail).append(g)
         return ok, [f.name for f in fail]
 
-    # ───── eventos ─────
+    # ────── eventos ──────
     @commands.Cog.listener()
     async def on_member_join(self, m: discord.Member):
         if m.id in self.ban_cache:
@@ -115,61 +129,64 @@ class GlobalBanCog(commands.Cog):
             except discord.Forbidden:
                 pass
 
-    # ───── exec helpers ─────
-    async def _exec_ban(self, user, mod, reason):
+    # ────── exec helpers ──────
+    async def _exec_ban(self, user: discord.User, moderator, reason: str):
         if time.time() - self.last_gban < self.RATE_LIMIT:
             raise RuntimeError(f"Aguarde {self.RATE_LIMIT}s entre bans.")
-        ok, fail = await self._mass(
-            self.bot.guilds, lambda g: g.ban(user, reason=f"[GlobalBan] {reason}"))
-        if self._add_db(user.id, mod.id, reason):
+
+        ok, fail = await self._mass(self.bot.guilds,
+                                    lambda g: g.ban(user, reason=f"[GlobalBan] {reason}"))
+        if self._add_ban_db(user.id, moderator.id, reason):
             self.ban_cache.add(user.id)
         self.last_gban = time.time()
 
+        # DM
         try:
             await user.send(embed=E.info(f"Você foi **banido globalmente**.\nMotivo: **{reason}**"))
         except discord.HTTPException:
             pass
 
-        txt = (f"**Usuário:** {user} (`{user.id}`)\n"
-               f"**Motivo:** {reason}\n"
-               f"**Servidores banidos:** {len(ok)}/{len(self.bot.guilds)}")
+        desc = (f"**Usuário:** {user} (`{user.id}`)\n"
+                f"**Motivo:** {reason}\n"
+                f"**Servidores banidos:** {len(ok)}/{len(self.bot.guilds)}")
         if fail:
-            txt += f"\n⚠️ Falhou em: {', '.join(fail)}"
-        emb = E.ok(txt, footer=f"Banido por {mod}", thumbnail_url=user.display_avatar.url)
-        await self._broadcast(emb, ok)
-        return emb
+            desc += f"\n⚠️ Falhou em: {', '.join(fail)}"
+        embed = E.ok(desc, footer=f"Banido por {moderator}", thumbnail_url=user.display_avatar.url)
+        await self._broadcast(embed, ok)
+        return embed
 
-    async def _exec_unban(self, uid, mod):
-        ok, fail = await self._mass(
-            self.bot.guilds, lambda g: g.unban(discord.Object(id=uid), reason="[GlobalUnban]"))
-        removed = self._del_db(uid); self.ban_cache.discard(uid)
+    async def _exec_unban(self, uid: int, moderator):
+        ok, fail = await self._mass(self.bot.guilds,
+                                    lambda g: g.unban(discord.Object(id=uid), reason="[GlobalUnban]"))
+        removed = self._del_ban_db(uid)
+        self.ban_cache.discard(uid)
 
-        txt = (f"**Usuário ID:** `{uid}`\n"
-               f"**Desbanido em:** {len(ok)}/{len(self.bot.guilds)} servidores\n"
-               f"**Registros removidos:** {removed}")
+        desc = (f"**Usuário ID:** `{uid}`\n"
+                f"**Desbanido em:** {len(ok)}/{len(self.bot.guilds)} servidores\n"
+                f"**Registros removidos:** {removed}")
         if fail:
-            txt += f"\n⚠️ Falhou em: {', '.join(fail)}"
-        emb = E.ok(txt, footer=f"Unban por {mod}")
-        await self._broadcast(emb, ok)
-        return emb
+            desc += f"\n⚠️ Falhou em: {', '.join(fail)}"
+        embed = E.ok(desc, footer=f"Unban por {moderator}")
+        await self._broadcast(embed, ok)
+        return embed
 
-    # ───── prefix commands ─────
+    # ────── prefix commands ──────
     @commands.has_guild_permissions(administrator=True)
     @commands.command(name="gban")
     async def gban_prefix(self, ctx, target: discord.User, *, reason="Sem Motivo"):
         try:
-            emb = await self._exec_ban(target, ctx.author, reason)
+            embed = await self._exec_ban(target, ctx.author, reason)
         except RuntimeError as e:
             return await ctx.send(embed=E.err(str(e)))
-        await ctx.send(embed=emb)
+        await ctx.send(embed=embed)
 
     @commands.has_guild_permissions(administrator=True)
     @commands.command(name="gunban")
     async def gunban_prefix(self, ctx, target_id: int):
-        emb = await self._exec_unban(target_id, ctx.author)
-        await ctx.send(embed=emb)
+        embed = await self._exec_unban(target_id, ctx.author)
+        await ctx.send(embed=embed)
 
-    # ───── slash registration ─────
+    # ────── slash commands ──────
     def _register_slash_commands(self):
         admin_chk = lambda i: i.user.guild_permissions.administrator
 
@@ -177,47 +194,44 @@ class GlobalBanCog(commands.Cog):
         @self.gban.command(name="add", description="Ban global")
         @app_commands.check(admin_chk)
         @app_commands.describe(reason="Motivo do ban")
-        @app_commands.choices(
-            reason=[app_commands.Choice(name=r, value=r) for r in self.REASONS])
-        async def _add(inter, target: discord.User, reason: str = "Sem Motivo"):
+        @app_commands.choices(reason=[app_commands.Choice(name=r, value=r) for r in self.REASONS])
+        async def _add(inter: discord.Interaction, target: discord.User, reason: str = "Sem Motivo"):
             await inter.response.defer(thinking=True)
             try:
-                emb = await self._exec_ban(target, inter.user, reason)
+                embed = await self._exec_ban(target, inter.user, reason)
             except RuntimeError as e:
                 await inter.followup.send(embed=E.err(str(e)), ephemeral=True)
             else:
-                await inter.followup.send(embed=emb)
+                await inter.followup.send(embed=embed)
 
         # /gban remove
         @self.gban.command(name="remove", description="Unban global")
         @app_commands.check(admin_chk)
-        async def _remove(inter, target_id: int):
+        async def _remove(inter: discord.Interaction, target_id: int):
             await inter.response.defer(thinking=True)
-            emb = await self._exec_unban(target_id, inter.user)
-            await inter.followup.send(embed=emb)
+            embed = await self._exec_unban(target_id, inter.user)
+            await inter.followup.send(embed=embed)
 
         # /gban list
         @self.gban.command(name="list", description="Lista bans globais")
         @app_commands.check(admin_chk)
-        async def _list(inter, page: int = 1):
+        async def _list(inter: discord.Interaction, page: int = 1):
             with db() as s:
                 bans = s.query(GlobalBan).order_by(GlobalBan.timestamp.desc()).all()
             if not bans:
-                return await inter.response.send_message(
-                    embed=E.info("Nenhum ban registrado."), ephemeral=True)
+                return await inter.response.send_message(embed=E.info("Nenhum ban registrado."), ephemeral=True)
 
             PER = 10
             pages = (len(bans) + PER - 1) // PER
             page = max(1, min(page, pages))
 
             def make(idx: int):
-                slice_ = bans[idx*PER:(idx+1)*PER]
-                lines = [f"`{b.discord_id}` • {b.reason} • <t:{int(b.timestamp.timestamp())}:R>"
-                         for b in slice_]
+                chunk = bans[idx*PER:(idx+1)*PER]
+                lines = [f"`{b.discord_id}` • {b.reason} • <t:{int(b.timestamp.timestamp())}:R>" for b in chunk]
                 return E.info("\n".join(lines), footer=f"Pág {idx+1}/{pages}")
 
             class Pager(discord.ui.View):
-                def __init__(self, idx=page-1):
+                def __init__(self, idx: int = page-1):
                     super().__init__(timeout=60); self.idx = idx
                 @discord.ui.button(label="◀️")
                 async def prev(self, _, i):
@@ -235,34 +249,26 @@ class GlobalBanCog(commands.Cog):
         # /gban setlog
         @self.gban.command(name="setlog", description="Define canal de logs")
         @app_commands.check(lambda i: i.user.guild_permissions.manage_guild)
-        async def _setlog(inter, channel: discord.TextChannel):
+        async def _setlog(inter: discord.Interaction, channel: discord.TextChannel):
             with db() as s:
-                s.merge(
-                    GlobalBanLogConfig(
-                        guild_id=str(inter.guild.id),
-                        channel_id=str(channel.id),
-                        set_by=str(inter.user.id)
-                    )
-                )
+                s.merge(GlobalBanLogConfig(guild_id=str(inter.guild.id),
+                                           channel_id=str(channel.id),
+                                           set_by=str(inter.user.id)))
             self.log_channels[inter.guild.id] = channel.id
-            await inter.response.send_message(
-                embed=E.ok(f"Canal de logs definido para {channel.mention}."), ephemeral=True)
+            await inter.response.send_message(embed=E.ok(f"Canal de logs definido para {channel.mention}."), ephemeral=True)
 
-    # ───── error handler --------
+    # ────── slash error handler ──────
     @commands.Cog.listener()
-    async def on_app_command_error(self, inter, error):
+    async def on_app_command_error(self, inter: discord.Interaction, error):
         if isinstance(error, app_commands.MissingPermissions):
-            await inter.response.send_message(
-                embed=E.err("⚠️ Você não tem permissão para isso."), ephemeral=True)
+            await inter.response.send_message(embed=E.err("Você não tem permissão."), ephemeral=True)
         elif isinstance(error, app_commands.CheckFailure):
-            await inter.response.send_message(
-                embed=E.err("⚠️ Apenas administradores podem usar este comando."), ephemeral=True)
+            await inter.response.send_message(embed=E.err("Apenas administradores podem usar este comando."), ephemeral=True)
         else:
             logger.exception("Slash error", exc_info=error)
             if not inter.response.is_done():
-                await inter.response.send_message(
-                    embed=E.err(f"Erro inesperado: `{error.__class__.__name__}`"), ephemeral=True)
+                await inter.response.send_message(embed=E.err(f"Erro inesperado: {error.__class__.__name__}"), ephemeral=True)
 
-# ───── setup obrigatório ─────
+# ══════════════ setup ══════════════
 async def setup(bot: commands.Bot):
     await bot.add_cog(GlobalBanCog(bot))
