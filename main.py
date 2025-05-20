@@ -1,18 +1,24 @@
 import os
 import asyncio
 import random
+
 import discord
 from discord.ext import commands, tasks
 
 TOKEN = os.getenv("TOKEN")
 
+# ─────────────────────────── Intents ────────────────────────────
 intents = discord.Intents.default()
+intents.guilds = True
 intents.messages = True
 intents.message_content = True
-intents.guilds = True
+intents.members = True     # <<< ESSENCIAL para varrer guild.members / fetch_members
+intents.presences = False  # não precisa de presences, a menos que queira status dos users
 
+# ───────────────────────── Bot Client ──────────────────────────
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# ─────────────────────────── Status Loop ────────────────────────
 STATUS_LIST = [
     "traduzindo",
     "matando zumbis",
@@ -21,24 +27,22 @@ STATUS_LIST = [
     "em lua de sangue",
 ]
 
-# ───────────────────────────── status rotativo ─────────────────────────────
 @tasks.loop(minutes=5)
 async def change_status():
     status = random.choice(STATUS_LIST)
     await bot.change_presence(activity=discord.Game(name=status))
     print(f"Status atualizado para: {status}")
 
-# ───────────────────────────── evento on_ready ─────────────────────────────
+# ─────────────────────────── on_ready ───────────────────────────
 @bot.event
 async def on_ready():
-    # evita rodar duas vezes se o gateway reconectar
     if getattr(bot, "ready_flag", False):
         return
     bot.ready_flag = True
 
     print(f"✅ Bot conectado como {bot.user}")
 
-    # Sincroniza /comandos
+    # Sincroniza os comandos de slash
     await bot.tree.sync()
     print("✅ Comandos de Slash sincronizados!")
 
@@ -48,19 +52,19 @@ async def on_ready():
 
     print("🚀 Bot está pronto para uso!")
 
-# ───────────────────────────── carga de cogs ───────────────────────────────
+# ─────────────────────────── Load Cogs ──────────────────────────
 async def load_cogs():
     cogs = [
         "cogs.admin",
         "cogs.utility",
-        "cogs.global_ban",
+        "cogs.global_ban",      # <-- Cog de ban global com recheck a cada 5 min
         "cogs.ajuda_completa",
         "cogs.arcano",
         "cogs.nome",
         "cogs.temporario",
         "cogs.ranks",
         "cogs.recrutamento",
-        # "cogs.sevendays",  # ← desativado, remove Telnet + ServerConfig
+        # "cogs.sevendays",  # desativado
     ]
     for cog in cogs:
         try:
@@ -69,7 +73,7 @@ async def load_cogs():
         except Exception as e:
             print(f"❌ Erro ao carregar {cog}: {e}")
 
-# ───────────────────────────── main async ──────────────────────────────────
+# ───────────────────────────── Main ─────────────────────────────
 async def main():
     await load_cogs()
     if not TOKEN:
@@ -77,6 +81,6 @@ async def main():
         return
     await bot.start(TOKEN)
 
-# ───────────────────────────── entrypoint ──────────────────────────────────
+# ────────────────────────── Entrypoint ──────────────────────────
 if __name__ == "__main__":
     asyncio.run(main())
