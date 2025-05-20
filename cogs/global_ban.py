@@ -1,3 +1,4 @@
+# cogs/global_ban.py
 """
 GlobalBan – banimento global em todos os servidores do bot.
 Necessita tabelas:
@@ -53,14 +54,14 @@ def db():
 
 # ───────────────────────── Cog ──────────────────────────────────
 class GlobalBanCog(commands.Cog):
-    RATE_LIMIT = 30          # segundos entre /gban add
+    RATE_LIMIT = 30
     REASONS    = ["Spam", "Scam", "Tóxico", "NSFW", "Cheats", "Outro"]
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.last_gban = 0.0
-        self.log_channels: dict[int, Optional[int]] = {}  # guild_id → channel_id
-        self.ban_cache: set[int] = set()                  # IDs já banidos
+        self.log_channels: dict[int, Optional[int]] = {}
+        self.ban_cache: set[int] = set()
 
         self.gban = app_commands.Group(name="gban", description="Comandos de ban global")
         self._register_slash_commands()
@@ -69,7 +70,10 @@ class GlobalBanCog(commands.Cog):
     async def cog_load(self):
         await self._cache_log_channels()
         await self._load_ban_cache()
-        await self._initial_sync_on_startup()
+
+        # agenda a sync – só roda depois do login completo
+        self.bot.loop.create_task(self._initial_sync_on_startup())
+
         self.bot.tree.add_command(self.gban)
 
     async def cog_unload(self):
@@ -100,7 +104,6 @@ class GlobalBanCog(commands.Cog):
 
     # ───── sync helpers ─────
     async def _sync_guild(self, guild: discord.Guild) -> int:
-        """Aplica todos os bans do cache a um guild e retorna quantos foram aplicados."""
         async def try_ban(uid: int):
             try:
                 await guild.ban(discord.Object(id=uid), reason="[GlobalBan] Sincronização")
@@ -113,7 +116,6 @@ class GlobalBanCog(commands.Cog):
         return sum(results)
 
     async def _initial_sync_on_startup(self):
-        """Garante que todos os guilds existentes recebam os bans quando o bot inicia."""
         await self.bot.wait_until_ready()
         total = 0
         for g in self.bot.guilds:
@@ -133,7 +135,6 @@ class GlobalBanCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
-        """Aplica bans quando o bot é convidado para um novo servidor."""
         self.log_channels.setdefault(guild.id, None)
         count = await self._sync_guild(guild)
         if count:
@@ -242,11 +243,14 @@ class GlobalBanCog(commands.Cog):
                 return await inter.response.send_message(
                     embed=E.info(f"Já configurado para {channel.mention}."), ephemeral=True)
             with db() as s:
-                s.merge(GlobalBanLogConfig(guild_id=str(inter.guild.id),
-                                           channel_id=str(channel.id),
-                                           set_by=str(inter.user.id)))
+                s.merge(
+                    GlobalBanLogConfig(guild_id=str(inter.guild.id),
+                                       channel_id=str(channel.id),
+                                       set_by=str(inter.user.id))
+                )
             self.log_channels[inter.guild.id] = channel.id
-            await inter.response.send_message(embed=E.ok(f"Canal definido: {channel.mention}"), ephemeral=True)
+            await inter.response.send_message(embed=E.ok(f"Canal definido: {channel.mention}"),
+                                              ephemeral=True)
 
         @self.gban.command(name="removelog", description="Remove canal de logs")
         @app_commands.check(lambda i: i.user.guild_permissions.manage_guild)
@@ -257,17 +261,20 @@ class GlobalBanCog(commands.Cog):
             with db() as s:
                 s.query(GlobalBanLogConfig).filter_by(guild_id=str(inter.guild.id)).delete()
             self.log_channels.pop(inter.guild.id, None)
-            await inter.response.send_message(embed=E.ok("Canal de log removido."), ephemeral=True)
+            await inter.response.send_message(embed=E.ok("Canal de log removido."),
+                                              ephemeral=True)
 
     # ───── error handler ─────
     @commands.Cog.listener()
     async def on_app_command_error(self, inter, error):
         if isinstance(error, (app_commands.CheckFailure, app_commands.MissingPermissions)):
-            await inter.response.send_message(embed=E.err("Permissão insuficiente."), ephemeral=True)
+            await inter.response.send_message(embed=E.err("Permissão insuficiente."),
+                                              ephemeral=True)
         else:
             logger.exception("Slash error", exc_info=error)
             if not inter.response.is_done():
-                await inter.response.send_message(embed=E.err("Erro inesperado."), ephemeral=True)
+                await inter.response.send_message(embed=E.err("Erro inesperado."),
+                                                  ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────
 async def setup(bot: commands.Bot):
