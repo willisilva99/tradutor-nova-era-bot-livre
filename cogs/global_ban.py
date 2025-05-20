@@ -1,4 +1,3 @@
-# cogs/global_ban.py
 """
 GlobalBan – banimento global em todos os servidores do bot.
 Necessita tabelas:
@@ -22,16 +21,18 @@ logger = logging.getLogger(__name__)
 class E:
     @staticmethod
     def _b(t, d, c):
-        return discord.Embed(title=t, description=d, colour=c,
-                             timestamp=datetime.now(timezone.utc))
+        return discord.Embed(
+            title=t, description=d, colour=c,
+            timestamp=datetime.now(timezone.utc)
+        )
 
     @staticmethod
-    def _f(embed, *, footer=None, thumb=None):
+    def _f(e: discord.Embed, *, footer: str | None = None, thumb: str | None = None):
         if footer:
-            embed.set_footer(text=footer)
+            e.set_footer(text=footer)
         if thumb:
-            embed.set_thumbnail(url=thumb)
-        return embed
+            e.set_thumbnail(url=thumb)
+        return e
 
     ok   = classmethod(lambda cls, d, **k: cls._f(cls._b("✅ Sucesso",     d, discord.Color.green()), **k))
     err  = classmethod(lambda cls, d, **k: cls._f(cls._b("❌ Erro",        d, discord.Color.red()),   **k))
@@ -68,6 +69,7 @@ class GlobalBanCog(commands.Cog):
     async def cog_load(self):
         await self._cache_log_channels()
         await self._load_ban_cache()
+        await self._initial_sync_on_startup()
         self.bot.tree.add_command(self.gban)
 
     async def cog_unload(self):
@@ -88,7 +90,36 @@ class GlobalBanCog(commands.Cog):
     async def _log(self, guild: discord.Guild, embed: discord.Embed):
         ch = guild.get_channel(self.log_channels.get(guild.id, 0)) or guild.system_channel
         if ch and ch.permissions_for(guild.me).send_messages:
-            await ch.send(embed=embed)
+            try:
+                await ch.send(embed=embed)
+            except Exception:
+                pass
+
+    async def _broadcast(self, embed: discord.Embed, guilds: List[discord.Guild]):
+        await asyncio.gather(*(self._log(g, embed) for g in guilds))
+
+    # ───── sync helpers ─────
+    async def _sync_guild(self, guild: discord.Guild) -> int:
+        """Aplica todos os bans do cache a um guild e retorna quantos foram aplicados."""
+        async def try_ban(uid: int):
+            try:
+                await guild.ban(discord.Object(id=uid), reason="[GlobalBan] Sincronização")
+                await self._log(guild, E.ok(f"<@{uid}> banido (sync global)."))
+                return True
+            except (discord.Forbidden, discord.HTTPException):
+                return False
+
+        results = await asyncio.gather(*(try_ban(uid) for uid in self.ban_cache))
+        return sum(results)
+
+    async def _initial_sync_on_startup(self):
+        """Garante que todos os guilds existentes recebam os bans quando o bot inicia."""
+        await self.bot.wait_until_ready()
+        total = 0
+        for g in self.bot.guilds:
+            total += await self._sync_guild(g)
+        if total:
+            logger.info("[GlobalBan] %d bans aplicados em sync de startup", total)
 
     # ───── eventos ─────
     @commands.Cog.listener()
@@ -102,25 +133,13 @@ class GlobalBanCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
-        """Quando o bot entra em um novo servidor, aplica todos os bans existentes."""
+        """Aplica bans quando o bot é convidado para um novo servidor."""
         self.log_channels.setdefault(guild.id, None)
+        count = await self._sync_guild(guild)
+        if count:
+            await self._log(guild, E.ok(f"🔒 {count} usuários banidos automaticamente (sync global)."))
 
-        async def try_ban(uid: int):
-            try:
-                obj = discord.Object(id=uid)
-                await guild.ban(obj, reason="[GlobalBan] Sincronização de entrada")
-                await self._log(guild, E.ok(f"<@{uid}> banido (sync global)."))
-                return True
-            except (discord.Forbidden, discord.HTTPException):
-                return False
-
-        tasks = [try_ban(uid) for uid in self.ban_cache]
-        resultados = await asyncio.gather(*tasks)
-        total = sum(resultados)
-        if total:
-            await self._log(guild, E.ok(f"🔒 {total} usuários banidos automaticamente (sync global)."))
-
-    # ───── helpers ─────
+    # ───── mass util ─────
     async def _mass(self, guilds, fn) -> Tuple[List[discord.Guild], List[str]]:
         res = await asyncio.gather(*(fn(g) for g in guilds), return_exceptions=True)
         ok, fail = [], []
@@ -128,6 +147,7 @@ class GlobalBanCog(commands.Cog):
             (ok if not isinstance(r, Exception) else fail).append(g)
         return ok, [f.name for f in fail]
 
+    # ───── DB helpers ─────
     def _add_db(self, uid: int, by: int, reason: str) -> bool:
         with db() as s:
             if s.query(GlobalBan).filter_by(discord_id=str(uid)).first():
@@ -142,7 +162,7 @@ class GlobalBanCog(commands.Cog):
     # ───── executar ban / unban ─────
     async def _exec_ban(self, user: discord.User, mod, reason: str):
         if time.time() - self.last_gban < self.RATE_LIMIT:
-            raise RuntimeError(f"Aguarde {self.RATE_LIMIT}s.")
+            raise RuntimeError(f"Aguarde {self.RATE_LIMIT}s entre bans.")
 
         ok, fail = await self._mass(self.bot.guilds,
                                     lambda g: g.ban(user, reason=f"[GlobalBan] {reason}"))
@@ -165,12 +185,11 @@ class GlobalBanCog(commands.Cog):
     async def _exec_unban(self, uid: int, mod):
         ok, fail = await self._mass(self.bot.guilds,
                                     lambda g: g.unban(discord.Object(id=uid), reason="[GlobalUnban]"))
-        removed = self._del_db(uid)
+        self._del_db(uid)
         self.ban_cache.discard(uid)
 
         desc = (f"**Usuário ID:** `{uid}`\n"
-                f"**Desbanido em:** {len(ok)}/{len(self.bot.guilds)} servidores\n"
-                f"**Registros removidos:** {removed}")
+                f"**Desbanido em:** {len(ok)}/{len(self.bot.guilds)} servidores")
         if fail:
             desc += f"\n⚠️ Falhou em: {', '.join(fail)}"
         await self._broadcast(E.ok(desc, footer=f"Unban por {mod}"), ok)
@@ -178,16 +197,18 @@ class GlobalBanCog(commands.Cog):
     # ───── prefix cmds ─────
     @commands.has_guild_permissions(administrator=True)
     @commands.command(name="gban")
-    async def _gban_prefix(self, ctx, target: discord.User, *, reason="Sem Motivo"):
+    async def _gban_prefix(self, ctx, alvo: discord.User, *, reason="Sem Motivo"):
         try:
-            await self._exec_ban(target, ctx.author, reason)
+            await self._exec_ban(alvo, ctx.author, reason)
+            await ctx.message.add_reaction("✅")
         except RuntimeError as e:
             await ctx.send(embed=E.err(str(e)))
 
     @commands.has_guild_permissions(administrator=True)
     @commands.command(name="gunban")
-    async def _gunban_prefix(self, ctx, target_id: int):
-        await self._exec_unban(target_id, ctx.author)
+    async def _gunban_prefix(self, ctx, uid: int):
+        await self._exec_unban(uid, ctx.author)
+        await ctx.message.add_reaction("✅")
 
     # ───── slash cmds ─────
     def _register_slash_commands(self):
