@@ -27,8 +27,10 @@ class E:
 
     @staticmethod
     def _final(embed, *, footer=None, thumbnail_url=None):
-        if footer:          embed.set_footer(text=footer)
-        if thumbnail_url:   embed.set_thumbnail(url=thumbnail_url)
+        if footer:
+            embed.set_footer(text=footer)
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
         return embed
 
     @classmethod
@@ -82,8 +84,7 @@ class GlobalBanCog(commands.Cog):
 
     async def _load_ban_cache(self):
         with db() as s:
-            self.ban_cache = {int(r.discord_id)
-                              for r in s.query(GlobalBan.discord_id)}
+            self.ban_cache = {int(r.discord_id) for r in s.query(GlobalBan.discord_id)}
         logger.info("[GlobalBan] cache %d IDs", len(self.ban_cache))
 
     # ───── logging util ─────
@@ -202,93 +203,4 @@ class GlobalBanCog(commands.Cog):
         # /gban remove
         @self.gban.command(name="remove", description="Unban global")
         @app_commands.check(admin_chk)
-        async def _remove(inter: discord.Interaction, target_id: int):
-            await inter.response.defer(thinking=True)
-            embed = await self._exec_unban(target_id, inter.user)
-            await inter.followup.send(embed=embed)
-
-        # /gban list
-        @self.gban.command(name="list", description="Lista bans globais")
-        @app_commands.check(admin_chk)
-        async def _list(inter: discord.Interaction, page: int = 1):
-            with db() as s:
-                bans = s.query(GlobalBan).order_by(GlobalBan.timestamp.desc()).all()
-            if not bans:
-                return await inter.response.send_message(embed=E.info("Nenhum ban registrado."), ephemeral=True)
-
-            PER = 10
-            pages = (len(bans) + PER - 1) // PER
-            page = max(1, min(page, pages))
-
-            def make(idx: int):
-                chunk = bans[idx*PER:(idx+1)*PER]
-                lines = [
-                    f"`{b.discord_id}` • {b.reason} • banido por <@{int(b.banned_by)}>"
-                    f" • <t:{int(b.timestamp.timestamp())}:R>"
-                    for b in chunk
-                ]
-                return E.info("\n".join(lines), footer=f"Pág {idx+1}/{pages}")
-
-            class Pager(discord.ui.View):
-                def __init__(self, idx=page-1):
-                    super().__init__(timeout=60); self.idx = idx
-                @discord.ui.button(label="◀️")
-                async def prev(self, _, i):
-                    if self.idx > 0:
-                        self.idx -= 1
-                        await i.response.edit_message(embed=make(self.idx), view=self)
-                @discord.ui.button(label="▶️")
-                async def nxt(self, _, i):
-                    if self.idx < pages-1:
-                        self.idx += 1
-                        await i.response.edit_message(embed=make(self.idx), view=self)
-
-            await inter.response.send_message(embed=make(page-1), view=Pager(), ephemeral=True)
-
-        # /gban setlog
-        @self.gban.command(name="setlog", description="Define canal de logs")
-        @app_commands.check(lambda i: i.user.guild_permissions.manage_guild)
-        async def _setlog(inter: discord.Interaction, channel: discord.TextChannel):
-            # verifica configuração existente
-            current_id = self.log_channels.get(inter.guild.id)
-            if current_id is not None and int(current_id) == channel.id:
-                return await inter.response.send_message(
-                    embed=E.info(f"Canal já estava configurado para {channel.mention}."), ephemeral=True)
-
-            with db() as s:
-                s.merge(GlobalBanLogConfig(guild_id=str(inter.guild.id),
-                                           channel_id=str(channel.id),
-                                           set_by=str(inter.user.id)))
-            self.log_channels[inter.guild.id] = channel.id
-            await inter.response.send_message(
-                embed=E.ok(f"Canal de logs definido para {channel.mention}."), ephemeral=True)
-
-        # /gban removelog
-        @self.gban.command(name="removelog", description="Remove a configuração de log")
-        @app_commands.check(lambda i: i.user.guild_permissions.manage_guild)
-        async def _removelog(inter: discord.Interaction):
-            if inter.guild.id not in self.log_channels:
-                return await inter.response.send_message(
-                    embed=E.info("Nenhum canal de log estava configurado."), ephemeral=True)
-
-            with db() as s:
-                s.query(GlobalBanLogConfig).filter_by(guild_id=str(inter.guild.id)).delete()
-            self.log_channels.pop(inter.guild.id, None)
-            await inter.response.send_message(embed=E.ok("Canal de log removido."), ephemeral=True)
-
-    # ───── slash error handler ─────
-    @commands.Cog.listener()
-    async def on_app_command_error(self, inter, error):
-        if isinstance(error, app_commands.MissingPermissions):
-            await inter.response.send_message(embed=E.err("Você não tem permissão."), ephemeral=True)
-        elif isinstance(error, app_commands.CheckFailure):
-            await inter.response.send_message(embed=E.err("Apenas administradores."), ephemeral=True)
-        else:
-            logger.exception("Slash error", exc_info=error)
-            if not inter.response.is_done():
-                await inter.response.send_message(
-                    embed=E.err(f"Erro inesperado: {error.__class__.__name__}"), ephemeral=True)
-
-# ═════════ setup ═════════
-async def setup(bot: commands.Bot):
-    await bot.add_cog(GlobalBanCog(bot))
+        async def _remove(inter: discord.Interaction, target_id: int
