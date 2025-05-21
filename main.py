@@ -59,7 +59,6 @@ async def load_cogs():
         "cogs.utility",
         "cogs.global_ban",      # <-- Cog de ban global com recheck a cada 5 min
         "cogs.ajuda_completa",
-        "cogs.arcano",
         "cogs.nome",
         "cogs.temporario",
         "cogs.ranks",
