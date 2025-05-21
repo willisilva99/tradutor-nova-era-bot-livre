@@ -20,13 +20,17 @@ from db import SessionLocal, GlobalBan, GlobalBanLogConfig
 
 logger = logging.getLogger(__name__)
 
+# Somente este usuário pode ver a lista de servidores protegidos
+PROTECTED_COMMAND_USER_ID = 470628393272999948
+
 # ───────────────────────── Embed helper ─────────────────────────
 class E:
     @staticmethod
-    def _base(title: str, color: discord.Color, user: discord.User):
+    def _base(title: str, color: discord.Color, user: Optional[discord.User] = None):
         e = discord.Embed(title=title, colour=color, timestamp=datetime.now(timezone.utc))
-        e.set_author(name=str(user), icon_url=user.display_avatar.url)
-        e.set_thumbnail(url=user.display_avatar.url)
+        if user:
+            e.set_author(name=str(user), icon_url=user.display_avatar.url)
+            e.set_thumbnail(url=user.display_avatar.url)
         return e
 
     @classmethod
@@ -131,7 +135,7 @@ class GlobalBanCog(commands.Cog):
     async def _load_ban_cache(self):
         with db() as s:
             self.ban_cache = {int(r.discord_id) for r in s.query(GlobalBan)}
-        logger.info("[GlobalBan] cache carregado com %d IDs", len(self.ban_cache))
+        logger.info(f"[GlobalBan] cache carregado com {len(self.ban_cache)} IDs")
 
     # ───── periodic recheck ─────
     async def _periodic_recheck(self):
@@ -147,7 +151,7 @@ class GlobalBanCog(commands.Cog):
                         except discord.Forbidden:
                             logger.warning(f"[GlobalBan] sem permissão para banir {member.id} em {guild.id}")
                         except Exception as e:
-                            logger.error(f"[GlobalBan] erro ao banir {member.id} em {guild.id}: {e}")
+                            logger.error(f"[GlobalBan] erro ao banir {member.id}: {e}")
             await asyncio.sleep(self.RECHECK_INTERVAL)
 
     # ───── logging util ─────
@@ -233,6 +237,24 @@ class GlobalBanCog(commands.Cog):
         await self._exec_unban(uid, ctx.author)
         await ctx.message.add_reaction("✅")
 
+    @commands.has_guild_permissions(administrator=True)
+    @commands.command(name="protected_servers")
+    async def _protected_servers_prefix(self, ctx):
+        """Mostra servidores protegidos (usuário autorizado somente)."""
+        if ctx.author.id != PROTECTED_COMMAND_USER_ID:
+            return await ctx.send(embed=E.error("Permissão negada."), delete_after=10)
+        guilds = self.bot.guilds
+        embed = discord.Embed(
+            title="🤖 Servidores Protegidos",
+            description=f"O bot está em **{len(guilds)}** servidores:",
+            color=discord.Color.blue(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        for g in guilds:
+            embed.add_field(name=g.name, value=f"ID: `{g.id}` • Membros: {g.member_count}", inline=False)
+        embed.set_footer(text=f"Solicitado por {ctx.author}", icon_url=ctx.author.display_avatar.url)
+        await ctx.send(embed=embed)
+
     # ───── slash commands ─────
     def _register_slash_commands(self):
         admin = lambda i: i.user.guild_permissions.administrator
@@ -271,6 +293,21 @@ class GlobalBanCog(commands.Cog):
                 ))
             self.log_channels[inter.guild.id] = channel.id
             await inter.response.send_message(embed=E.info(f"Canal definido: {channel.mention}"), ephemeral=True)
+
+        @self.gban.command(name="servers", description="Servidores protegidos pelo bot")
+        @app_commands.check(lambda i: i.user.id == PROTECTED_COMMAND_USER_ID)
+        async def _servers_slash(inter: discord.Interaction):
+            guilds = self.bot.guilds
+            embed = discord.Embed(
+                title="🤖 Servidores Protegidos",
+                description=f"O bot está em **{len(guilds)}** servidores:",
+                color=discord.Color.blue(),
+                timestamp=datetime.now(timezone.utc)
+            )
+            for g in guilds:
+                embed.add_field(name=g.name, value=f"ID: `{g.id}` • Membros: {g.member_count}", inline=False)
+            embed.set_footer(text=f"Solicitado por {inter.user}", icon_url=inter.user.display_avatar.url)
+            await inter.response.send_message(embed=embed, ephemeral=True)
 
         @self.gban.command(name="removelog", description="Remove canal de logs")
         @app_commands.check(lambda i: i.user.guild_permissions.manage_guild)
