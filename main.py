@@ -64,7 +64,7 @@ async def load_cogs():
         "cogs.temporario",
         "cogs.ranks",
         "cogs.recrutamento",
-        # "cogs.sevendays",  # desativado
+        "cogs.serverstatus",  # desativado
     ]
     for cog in cogs:
         try:
